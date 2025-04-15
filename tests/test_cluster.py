@@ -2,8 +2,10 @@ import time
 
 import httpx
 
+from tests.util import assert_status
 
-def test_cluster(setup_cluster, hepcdn_access_header):
+
+def test_cluster_gossip(setup_cluster, hepcdn_access_header):
     """
     Test the cluster endpoint.
     """
@@ -26,3 +28,26 @@ def test_cluster(setup_cluster, hepcdn_access_header):
             assert item.keys() == {"name", "data"}
             assert item["data"]["status"] == "alive"
             assert item["data"].keys() == {"status", "epoch", "timestamp"}
+
+
+def test_cluster_tpc(setup_cluster, wlcg_create_header):
+    assert len(setup_cluster) > 1
+    server1, server2 = setup_cluster[:2]
+
+    path = f"{server1}webdav/test_tpc.txt"
+    data = "Hello, world!" * 10_000
+
+    response = httpx.put(path, headers=wlcg_create_header, content=data)
+    assert_status(response, httpx.codes.CREATED)
+    assert response.text == "file created\n"
+
+    # TODO: have setup_cluster return client-side and server-side URLs
+    src = "http://nginx-webdav-test0:8580/webdav/test_tpc.txt"
+    dst = f"{server2}webdav/test_tpc.txt"
+
+    headers = dict(wlcg_create_header)
+    headers["Source"] = src
+    headers["TransferHeaderAuthorization"] = headers["Authorization"]
+    response = httpx.request("COPY", dst, headers=headers)
+    assert response.status_code == httpx.codes.ACCEPTED
+    assert response.text.strip() == "success: Created"
