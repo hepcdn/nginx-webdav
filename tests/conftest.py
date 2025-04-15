@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import random
-import socket
+import socketserver
 import subprocess
 import time
 import uuid
@@ -241,11 +241,10 @@ def build_container():
 def setup_server(build_container: None, oidc_mock_idp: MockIdP) -> Iterator[dict[str, str]]:
     """A running nginx-webdav server for testing"""
     # Find an available port.
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     open_port = 8280
     for port in range(open_port, open_port + 100):
         try:
-            sock.create_connection("localhost", port)
+            socketserver.TCPServer(("", port), None)
         except IOError:
             open_port = port
             break
