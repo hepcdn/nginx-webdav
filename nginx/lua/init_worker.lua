@@ -7,11 +7,16 @@ local gossip = require("gossip")
 -- if file does not exist, we take the default values
 config.load("/etc/nginx/lua/config.json")
 
-local token_userpass = config.data.openidc_client_id .. ":" .. config.data.openidc_client_secret
-if token_userpass == ":" then
-    ngx.log(ngx.ERR, "No openidc_client_id or openidc_client_secret set in config.json")
+-- Only one worker thread needs to manage the gossip timer
+if ngx.worker.id() ~= 0 then
     return
 end
+
+if config.data.openidc_client_id == "" or config.data.openidc_client_secret == "" then
+    ngx.log(ngx.ERR, "Missing openidc_client_id or openidc_client_secret from config.json, will not start cluster gossip")
+    return
+end
+local token_userpass = config.data.openidc_client_id .. ":" .. config.data.openidc_client_secret
 
 -- This function is called by the gossip timer
 ---@type function
@@ -118,10 +123,8 @@ end
 
 
 -- Start the gossip timer
-if ngx.worker.id() == 0 then
-    local ok, err = ngx.timer.every(config.data.gossip_delay, worker_gossip)
-    if not ok then
-        ngx.log(ngx.ERR, "failed to create worker timer: ", err)
-        return
-    end
+local ok, err = ngx.timer.every(config.data.gossip_delay, worker_gossip)
+if not ok then
+    ngx.log(ngx.ERR, "failed to create worker timer: ", err)
+    return
 end
