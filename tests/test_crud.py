@@ -97,6 +97,10 @@ def test_put_wantdigest(
     assert_status(response, httpx.codes.CREATED)
     assert response.headers["Digest"] == f"adler32={expected_adler32:08x}"
 
+    response = httpx.get(path, headers=headers)
+    assert_status(response, httpx.codes.OK)
+    assert response.headers["Digest"] == f"adler32={expected_adler32:08x}"
+
 
 def test_put_mkdir(
     nginx_server: str,
