@@ -183,7 +183,7 @@ function cksumutil.getxattr(path, key)
       return "Error " .. ret .. " in getxattr", nil
     end
   else
-    return nil, ffi.string(value, buflen)
+    return nil, ffi.string(value, ret)
   end
 end
 
