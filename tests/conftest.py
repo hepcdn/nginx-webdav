@@ -213,11 +213,36 @@ def wlcg_modify_header(oidc_mock_idp: MockIdP) -> dict[str, str]:
 
 
 @pytest.fixture(scope="session")
-def setup_server(oidc_mock_idp: MockIdP):
+def build_container():
     # Make sure we are in the right place: one up from tests/
     assert os.getcwd() == os.path.dirname(os.path.dirname(__file__))
 
-    # see nginx/lua/config.lua for schema
+    # Build podman container
+    subprocess.check_call(
+        [
+            "podman",
+            "build",
+            "--build-arg",
+            'VERSION=0.0.0dev',
+            "-t",
+            "nginx-webdav",
+            "nginx",
+            "-f",
+            "nginx.dockerfile",
+        ]
+    )
+
+    yield
+
+
+@pytest.fixture(scope="module")
+def nginx_server(build_container: None, oidc_mock_idp: MockIdP) -> Iterator[str]:
+    """A running nginx-webdav server for testing
+
+    It's nice to have a module-scoped fixture for the server, so we can
+    reduce the number of irrelevant log messages in the test output.
+    """
+    # Configure the server (see nginx/lua/config.lua for schema)
     config = {
         "openidc_iss": oidc_mock_idp.iss,
         "openidc_pubkey": oidc_mock_idp.public_key_pem,
@@ -233,24 +258,6 @@ def setup_server(oidc_mock_idp: MockIdP):
     with open("nginx/lua/config.json", "w") as f:
         json.dump(config, f)
 
-    # Build podman container
-    subprocess.check_call(
-        ["podman", "build", "-t", "nginx-webdav", "nginx", "-f", "nginx.dockerfile"]
-    )
-
-    yield
-
-    # Clean up
-    os.remove("nginx/lua/config.json")
-
-
-@pytest.fixture(scope="module")
-def nginx_server(setup_server) -> Iterator[str]:
-    """A running nginx-webdav server for testing
-
-    It's nice to have a module-scoped fixture for the server, so we can
-    reduce the number of irrelevant log messages in the test output.
-    """
     # Start podman container
     podman_cmd = [
         "podman",
@@ -258,6 +265,8 @@ def nginx_server(setup_server) -> Iterator[str]:
         "-d",
         "-p",
         "8080:8080",
+        "-v",
+        "./nginx/lua/config.json:/etc/nginx/lua/config.json:ro",
         "--tmpfs",
         "/var/www/webdav:rw,size=100M,mode=1777",
     ]
@@ -296,23 +305,17 @@ def nginx_server(setup_server) -> Iterator[str]:
     subprocess.check_call(["podman", "stop", container_id], stdout=subprocess.DEVNULL)
     subprocess.check_call(["podman", "rm", container_id], stdout=subprocess.DEVNULL)
 
+    # Clean up
+    os.remove("nginx/lua/config.json")
+
 
 @pytest.fixture(scope="session")
-def setup_cluster(oidc_mock_idp: MockIdP):
+def setup_cluster(build_container: None, oidc_mock_idp: MockIdP):
     nservers = 3
-
-    # Make sure we are in the right place: one up from tests/
-    assert os.getcwd() == os.path.dirname(os.path.dirname(__file__))
-
-    # Build podman container
-    subprocess.check_call(
-        ["podman", "build", "-t", "nginx-webdav", "nginx", "-f", "nginx.dockerfile"]
-    )
 
     # Set up config files for each server
     for i in range(nservers):
         config = {
-            "server_address": f"http://nginx-webdav-test{i}:{8580 + i}/",
             "seed_peers": "http://nginx-webdav-test0:8580/" if i > 0 else "",
             "openidc_iss": oidc_mock_idp.iss,
             "openidc_pubkey": oidc_mock_idp.public_key_pem,

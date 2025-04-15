@@ -50,6 +50,10 @@ RUN yum install -y pcre openssl zlib dnsmasq epel-release libuv \
 
 COPY --from=build /usr/local/openresty /usr/local/openresty
 
+ARG VERSION="0.0.1"
+ENV VERSION=${VERSION}
+
+
 ENV PATH=$PATH:/usr/local/openresty/luajit/bin:/usr/local/openresty/nginx/sbin:/usr/local/openresty/bin
 
 # Add LuaRocks paths

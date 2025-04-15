@@ -27,7 +27,7 @@ def test_cluster_gossip(setup_cluster, hepcdn_access_header):
         for item in items:
             assert item.keys() == {"name", "data"}
             assert item["data"]["status"] == "alive"
-            assert item["data"].keys() == {"status", "epoch", "timestamp"}
+            assert set(item["data"].keys()) == {"status", "epoch", "timestamp", "server_version"}
 
 
 def test_cluster_tpc(setup_cluster, wlcg_create_header):

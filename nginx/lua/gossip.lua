@@ -5,6 +5,13 @@ local config = require("config")
 local Gossip = {
 }
 
+---@class PeerData
+---@field epoch integer Monotonic increasing number that is incremented by the peer
+---@field status string Current server status (TODO: enum?)
+---@field timestamp integer UNIX time of the last update
+---@field server_version string Version of the server
+
+
 ---@type function
 ---@return table<string, boolean> peers, boolean starting
 ---Return a list of the current peers, and a boolean
@@ -27,29 +34,31 @@ end
 
 ---@type function
 ---@param peer string
----@return {epoch: integer, status: string, timestamp: integer} peerdata
+---@return PeerData peerdata
 function Gossip.get_peerdata(peer)
     local epoch = ngx.shared.gossip_data:get("epoch:" .. peer)
     if not epoch then
-        return {epoch = -1, status = "unknown", timestamp = 0}
+        return {epoch = -1, status = "unknown", timestamp = 0, server_version = "unknown"}
     end
     local status = ngx.shared.gossip_data:get("status:" .. peer)
     local timestamp = ngx.shared.gossip_data:get("timestamp:" .. peer)
-    return {epoch = epoch, status = status, timestamp = timestamp}
+    local server_version = ngx.shared.gossip_data:get("server_version:" .. peer)
+    return {epoch = epoch, status = status, timestamp = timestamp, server_version = server_version}
 end
 
 ---@type function
 ---@param peer string
----@param peerdata {epoch: integer, status: string, timestamp: integer}
+---@param peerdata PeerData
 function Gossip.set_peerdata(peer, peerdata)
     ngx.shared.gossip_data:set("epoch:" .. peer, peerdata.epoch)
     ngx.shared.gossip_data:set("status:" .. peer, peerdata.status)
     ngx.shared.gossip_data:set("timestamp:" .. peer, peerdata.timestamp)
+    ngx.shared.gossip_data:set("server_version:" .. peer, peerdata.server_version)
 end
 
 ---@type function
 ---@param peer string
----@param peerdata {epoch: integer, status: string, timestamp: integer}
+---@param peerdata PeerData
 function Gossip.update_peerdata(peer, peerdata)
     local current_timestamp = ngx.shared.gossip_data:get("timestamp:" .. peer)
     if current_timestamp and current_timestamp > peerdata.timestamp then
@@ -95,6 +104,7 @@ function Gossip.prepare_message()
     selfdata.epoch = selfdata.epoch + 1
     selfdata.status = "alive"
     selfdata.timestamp = ngx.now()
+    selfdata.server_version = config.data.server_version
     Gossip.set_peerdata(config.data.server_address, selfdata)
     table.insert(message, {
         name = config.data.server_address,
