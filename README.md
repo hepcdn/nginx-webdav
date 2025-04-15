@@ -13,7 +13,8 @@ A docker image is available:
 docker pull ghcr.io/hepcdn/nginx-webdav:latest
 ```
 The image expects the main data directory to be bind-mounted at `/var/www/webdav`.
-You will likely also want to bind-mount `/etc/grid-security/` or some subset of it.
+You will need to bind-mount `/etc/grid-security/` or some subset of it as well, to
+provide the GRID certificate trust network.
 
 The container is configurable via several environment variables:
 - `SERVER_NAME` (default: `localhost`)
@@ -25,6 +26,21 @@ The container is configurable via several environment variables:
 - `DEBUG` (true/false, default: false)
 
 See `nginx/docker-entrypoint.sh` for further details.
+
+You can also bind-mount a json configuration file to set additional configuration
+options, including secrets needed to join a cluster:
+```json
+{
+   "seed_peers": "https://cms-hepcdn.web.cern.ch/",
+   "openidc_client_id": "my_client_id",
+   "openidc_client_secret": "my_client_secret"
+}
+```
+You can get a client id by going to the CMS IAM self-service
+[client registration page](https://cms-auth.cern.ch/dashboard#!/home/newClient).
+The client will only need two scopes: `hepcdn.access` (create a custom scope) and `storage.read:/`.
+The full list of settings can be seen in `nginx/lua/config.lua`
+
 
 ## Development Instructions
 

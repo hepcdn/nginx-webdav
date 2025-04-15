@@ -2,3 +2,5 @@ user root;
 worker_processes auto;
 env TZ;
 env SSL_CERT_DIR;
+env VERSION;
+env SERVER_ADDRESS;

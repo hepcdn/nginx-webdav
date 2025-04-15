@@ -37,7 +37,9 @@ jobs:
           fetch-depth: 0
 
       - name: Build image
-        run: docker build -f nginx/nginx.dockerfile --tag $IMAGE_NAME --label "runnumber=${GITHUB_RUN_ID}" ./nginx
+        run: |
+          VERSION=$(echo "${{ github.ref }}" | sed -e 's,.*/\(.*\),\1,')
+          docker build -f nginx/nginx.dockerfile --build-arg VERSION=$VERSION --tag $IMAGE_NAME --label "runnumber=${GITHUB_RUN_ID}" ./nginx
 
       - name: Log in to registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin

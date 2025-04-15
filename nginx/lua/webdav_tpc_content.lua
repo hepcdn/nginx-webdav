@@ -50,7 +50,7 @@ local function third_party_pull(source_uri, destination_localpath, redirects)
 
     local headers = {
         ["Host"] = host,
-        ["User-Agent"] = "nginx-webdav-prototype/0.0.1", -- TODO: version from config
+        ["User-Agent"] = "nginx-webdav/" .. config.data.server_version,
     }
     if verify_checksum then
         headers["Want-Digest"] = "adler32"
