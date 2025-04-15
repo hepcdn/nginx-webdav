@@ -10,7 +10,7 @@ def test_cluster_gossip(setup_cluster, hepcdn_access_header):
     Test the cluster endpoint.
     """
     data = {}
-    for _ in range(10):
+    for _ in range(30):
         for server in setup_cluster:
             response = httpx.get(f"{server}/gossip", headers=hepcdn_access_header)
             data[server] = response.json()
