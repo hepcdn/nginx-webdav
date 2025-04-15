@@ -15,7 +15,7 @@ local Config = {
         uriprefix = "/webdav",
 
         -- Federation settings
-        seed_peers = "https://cms-hepcdn.web.cern.ch/", -- comma separated list of seed peers
+        seed_peers = "", -- comma separated list of seed peers
         gossip_delay = 10, -- in seconds
         gossip_fraction = 0.1, -- fraction of peers to gossip to
 
