@@ -75,6 +75,12 @@ COPY conf.d /etc/nginx/conf.d
 
 COPY lua /etc/nginx/lua
 
+# Make some directories writeable by non-root users
+RUN chgrp -R 0 /var/run/openresty/ && \
+    chmod -R g=u /var/run/openresty && \
+    chgrp -R 0 /etc/nginx/conf.d && \
+    chmod -R g=u /etc/nginx/conf.d
+
 COPY docker-entrypoint.sh /
 CMD ["nginx", "-g", "daemon off;"]
 ENTRYPOINT ["/docker-entrypoint.sh"]
