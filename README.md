@@ -28,8 +28,8 @@ The container is configurable via several environment variables:
 
 See `nginx/docker-entrypoint.sh` for further details.
 
-You can also bind-mount a json configuration file to set additional configuration
-options, including secrets needed to join a cluster:
+You can also bind-mount a json configuration file at `/etc/nginx/lua/config.json` 
+to set additional configuration options, including secrets needed to join a cluster:
 ```json
 {
    "seed_peers": "https://cms-hepcdn.web.cern.ch/",
