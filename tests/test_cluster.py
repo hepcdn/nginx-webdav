@@ -69,6 +69,7 @@ def test_cluster_redirect(setup_cluster, wlcg_create_header, wlcg_read_header):
 
     for j, server in enumerate(setup_cluster):
         for i in range(len(setup_cluster)):
+            # we can't follow the redirect because the server name is only known inside the podman network
             response = httpx.get(
                 f"{server}redirect/unique_file{i}.txt", headers=wlcg_read_header
             )
