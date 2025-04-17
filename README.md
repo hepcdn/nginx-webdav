@@ -28,8 +28,8 @@ The container is configurable via several environment variables:
 
 See `nginx/docker-entrypoint.sh` for further details.
 
-You can also bind-mount a json configuration file to set additional configuration
-options, including secrets needed to join a cluster:
+You can also bind-mount a json configuration file at `/etc/nginx/lua/config.json` 
+to set additional configuration options, including secrets needed to join a cluster:
 ```json
 {
    "seed_peers": "https://cms-hepcdn.web.cern.ch/",
@@ -40,7 +40,10 @@ options, including secrets needed to join a cluster:
 You can get a client id by going to the CMS IAM self-service
 [client registration page](https://cms-auth.cern.ch/dashboard#!/home/newClient).
 The client will only need two scopes: `hepcdn.access` (create a custom scope) and `storage.read:/`.
-The full list of settings can be seen in `nginx/lua/config.lua`
+You can view the generated client secret in the "Credentials" tab. Make sure to enable
+`client_credentials` in the "Grant types" tab.
+
+The full list of json configuration settings can be seen in `nginx/lua/config.lua`
 
 
 ## Development Instructions
