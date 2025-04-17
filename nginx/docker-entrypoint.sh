@@ -43,12 +43,9 @@ error_log stderr notice;
 
 server {
     lua_code_cache off;
-
-    location /webdav {
-        rewrite_log on;
-    }
 }
 EOF
+  echo "Debug mode enabled"
 else
   cat <<EOF >> /etc/nginx/conf.d/site.conf
 error_log stderr warn;

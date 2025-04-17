@@ -237,8 +237,22 @@ def build_container():
     yield
 
 
+@dataclass
+class ServerInstance:
+    """A server instance for testing"""
+
+    port: int
+    "Port on which the server is running"
+    container_id: str
+    "Podman container ID"
+    podurl: str
+    "URL with hostname resolvable from the podman network"
+    hosturl: str
+    "URL with hostname (or IP) resolvable from the host (pytest) network"
+
+
 @pytest.fixture(scope="session")
-def setup_server(build_container: None, oidc_mock_idp: MockIdP) -> Iterator[dict[str, str]]:
+def setup_server(build_container: None, oidc_mock_idp: MockIdP):
     """A running nginx-webdav server for testing"""
     # Find an available port.
     open_port = 8280
@@ -276,6 +290,8 @@ def setup_server(build_container: None, oidc_mock_idp: MockIdP) -> Iterator[dict
         "./nginx/lua/config.json:/etc/nginx/lua/config.json:ro",
         "--tmpfs",
         "/var/www/webdav:rw,size=100M,mode=1777",
+        "-e",
+        "DEBUG=true",
         # Set the name of the container so it will fail early if the old
         # container wasn't cleaned up
         "--name",
@@ -319,7 +335,12 @@ def setup_server(build_container: None, oidc_mock_idp: MockIdP) -> Iterator[dict
             subprocess.check_call(["podman", "logs", container_id])
             raise RuntimeError("Container did not start")
 
-        yield {"port": open_port, "container_id": container_id}
+        yield ServerInstance(
+            port=open_port,
+            container_id=container_id,
+            podurl="http://nginx-unit-test-container:8080/webdav",
+            hosturl=f"http://localhost:{open_port}/webdav",
+        )
     finally:
         # Stop podman container and clean up
         subprocess.check_call(
@@ -372,6 +393,8 @@ def setup_cluster(build_container: None, oidc_mock_idp: MockIdP):
             f"SERVER_NAME=nginx-webdav-test{i}",
             "-e",
             f"PORT={8580 + i}",
+            "-e",
+            "DEBUG=true",
             "--name",
             f"nginx-webdav-test{i}",
         ]
@@ -379,7 +402,15 @@ def setup_cluster(build_container: None, oidc_mock_idp: MockIdP):
         container_id = subprocess.check_output(podman_cmd).decode().strip()
         container_ids.append(container_id)
 
-    yield [f"http://localhost:{8580 + i}/" for i in range(nservers)]
+    yield [
+        ServerInstance(
+            port=8580 + i,
+            container_id=container_id,
+            podurl=f"http://nginx-webdav-test{i}:{8580 + i}/",
+            hosturl=f"http://localhost:{8580 + i}/",
+        )
+        for i, container_id in enumerate(container_ids)
+    ]
 
     # Clean up
     for i, container_id in enumerate(container_ids):
@@ -399,7 +430,7 @@ def setup_cluster(build_container: None, oidc_mock_idp: MockIdP):
 
 
 @pytest.fixture()
-def nginx_server(setup_server) -> Iterator[str]:
+def nginx_server(setup_server: ServerInstance) -> Iterator[str]:
     """A running nginx-webdav server for testing
 
     It's nice to have a module-scoped fixture for the server, so we can
@@ -407,8 +438,25 @@ def nginx_server(setup_server) -> Iterator[str]:
     """
 
     pre_time = datetime.datetime.now().isoformat()
-    yield f"http://localhost:{setup_server['port']}/webdav"
+    yield setup_server.hosturl
 
     subprocess.check_call(
-        ["podman", "logs", "--since", pre_time, setup_server["container_id"]]
+        ["podman", "logs", "--since", pre_time, setup_server.container_id]
     )
+
+
+@pytest.fixture()
+def nginx_cluster(setup_cluster: list[ServerInstance]):
+    """A running nginx-webdav cluster for testing
+
+    It's nice to have a module-scoped fixture for the server, so we can
+    reduce the number of irrelevant log messages in the test output.
+    """
+
+    pre_time = datetime.datetime.now().isoformat()
+    yield setup_cluster
+
+    for server in setup_cluster:
+        subprocess.check_call(
+            ["podman", "logs", "--since", pre_time, server.container_id]
+        )
