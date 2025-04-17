@@ -61,6 +61,7 @@ fi
 export SSL_CERT_DIR=$SSL_CERT_DIR
 
 # Start a dns server (just for respecting /etc/hosts)
-dnsmasq -kd &
+# use a non-standard port in case we are not running as root
+dnsmasq -kd -p 5353 &
 # Run target executable (probably nginx)
 exec "$@"

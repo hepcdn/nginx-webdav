@@ -79,7 +79,9 @@ COPY lua /etc/nginx/lua
 RUN chgrp -R 0 /var/run/openresty/ && \
     chmod -R g=u /var/run/openresty && \
     chgrp -R 0 /etc/nginx/conf.d && \
-    chmod -R g=u /etc/nginx/conf.d
+    chmod -R g=u /etc/nginx/conf.d && \
+    chgrp -R 0 /usr/local/openresty/nginx/logs && \
+    chmod -R g=u /usr/local/openresty/nginx/logs
 
 COPY docker-entrypoint.sh /
 CMD ["nginx", "-g", "daemon off;"]
