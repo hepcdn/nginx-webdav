@@ -72,7 +72,7 @@ local function worker_gossip(premature)
     end
     if not token or jwt:load_jwt(token).payload.exp < ngx.now() + 600 then
         local httpc = resty_http.new()
-        local res = httpc:request_uri(config.data.openidc_iss .. "token", {
+        local res, err = httpc:request_uri(config.data.openidc_iss .. "token", {
             method = "POST",
             -- TODO: make the scope configurable
             body = "grant_type=client_credentials&scope=storage.read%3A%2F+hepcdn.access",
@@ -83,6 +83,11 @@ local function worker_gossip(premature)
                 ["User-Agent"] = "nginx-webdav/" .. config.data.server_version,
             },
         })
+
+        if not res then
+            ngx.log(ngx.ERR, "Failed to get token from issuer ", config.data.openidc_iss, ": ", err)
+            return
+        end
 
         if res.status ~= 200 then
             ngx.log(ngx.ERR, "Failed to get token from issuer ", config.data.openidc_iss, ": ", res.status, " ", res.body)
