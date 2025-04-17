@@ -276,6 +276,8 @@ def setup_server(build_container: None, oidc_mock_idp: MockIdP) -> Iterator[dict
         "./nginx/lua/config.json:/etc/nginx/lua/config.json:ro",
         "--tmpfs",
         "/var/www/webdav:rw,size=100M,mode=1777",
+        "-e",
+        "DEBUG=true",
         # Set the name of the container so it will fail early if the old
         # container wasn't cleaned up
         "--name",
@@ -372,6 +374,8 @@ def setup_cluster(build_container: None, oidc_mock_idp: MockIdP):
             f"SERVER_NAME=nginx-webdav-test{i}",
             "-e",
             f"PORT={8580 + i}",
+            "-e",
+            "DEBUG=true",
             "--name",
             f"nginx-webdav-test{i}",
         ]

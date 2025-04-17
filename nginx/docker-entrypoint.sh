@@ -43,10 +43,6 @@ error_log stderr notice;
 
 server {
     lua_code_cache off;
-
-    location /webdav {
-        rewrite_log on;
-    }
 }
 EOF
 else
