@@ -26,7 +26,7 @@ local token_userpass = config.data.openidc_client_id .. ":" .. config.data.openi
 local function peer_exchange_gossip(peer, message, token)
     local httpc = resty_http.new()
     -- TODO: handle connection refused
-    local res, err = httpc:request_uri(peer .. "/gossip", {
+    local res, err = httpc:request_uri(peer .. "gossip", {
         method = "POST",
         body = message,
         headers = {
@@ -34,6 +34,7 @@ local function peer_exchange_gossip(peer, message, token)
             ["Content-Length"] = #message,
             ["Authorization"] = "Bearer " .. token,
             ["Accept"] = "application/json",
+            ["User-Agent"] = "nginx-webdav/" .. config.data.server_version,
         },
     })
     if not res then
@@ -79,6 +80,7 @@ local function worker_gossip(premature)
                 ["Content-Type"] = "application/x-www-form-urlencoded",
                 ["Accept"] = "application/json",
                 ["Authorization"] = "Basic " .. ngx.encode_base64(token_userpass),
+                ["User-Agent"] = "nginx-webdav/" .. config.data.server_version,
             },
         })
 
