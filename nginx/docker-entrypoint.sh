@@ -10,7 +10,10 @@ SSL_CERT_DIR=${SSL_CERT_DIR:-/etc/grid-security/certificates}
 DEBUG=${DEBUG:-false}
 
 if [ "$USE_SSL" == "true" ]; then
-  export SERVER_ADDRESS="https://${SERVER_NAME}:$PORT/"
+  # If $SERVER_ADDRESS is not set, autogenerate it with a guess
+  if [ -z "$SERVER_ADDRESS" ]; then
+    export SERVER_ADDRESS="https://${SERVER_NAME}:$PORT/"
+  fi
   cat <<EOF > /etc/nginx/conf.d/site.conf
 server {
     listen              $PORT ssl;
@@ -25,7 +28,10 @@ server {
 }
 EOF
 else
-  export SERVER_ADDRESS="http://${SERVER_NAME}:$PORT/"
+  # If $SERVER_ADDRESS is not set, autogenerate it with a guess
+  if [ -z "$SERVER_ADDRESS" ]; then
+    export SERVER_ADDRESS="http://${SERVER_NAME}:$PORT/"
+  fi
   cat <<EOF > /etc/nginx/conf.d/site.conf
 server {
     listen              $PORT;
