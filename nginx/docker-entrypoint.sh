@@ -7,6 +7,7 @@ USE_SSL=${USE_SSL:-false}
 SSL_HOST_CERT=${SSL_HOST_CERT:-/etc/grid-security/hostcert.pem}
 SSL_HOST_KEY=${SSL_HOST_KEY:-/etc/grid-security/hostkey.pem}
 SSL_CERT_DIR=${SSL_CERT_DIR:-/etc/grid-security/certificates}
+IPV4ONLY=${IPV4ONLY:-false}
 DEBUG=${DEBUG:-false}
 
 if [ "$USE_SSL" == "true" ]; then
@@ -62,6 +63,12 @@ export SSL_CERT_DIR=$SSL_CERT_DIR
 
 # Start a dns server (just for respecting /etc/hosts)
 # use a non-standard port in case we are not running as root
-dnsmasq -kd -p 5353 &
+# if we are ipv4 only, filter AAAA records
+if [ "$IPV4ONLY" == "true" ]; then
+  dnsmasq -kd -p 5353 --filter-AAAA &
+else
+  dnsmasq -kd -p 5353 &
+fi
+
 # Run target executable (probably nginx)
 exec "$@"
