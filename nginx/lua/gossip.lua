@@ -10,6 +10,7 @@ local Gossip = {
 ---@field status string Current server status (TODO: enum?)
 ---@field timestamp integer UNIX time of the last update
 ---@field server_version string Version of the server
+---@field failures integer Number of failures to exchange gossip with this peer (from us or any other peer)
 
 
 ---@type function
@@ -20,7 +21,7 @@ function Gossip.peers()
     local peerstr = ngx.shared.gossip_data:get("peers")
     local starting = false
     if not peerstr then
-        peerstr = config.data.seed_peers
+        peerstr = config.data.seed_peers .. ","
         ngx.shared.gossip_data:set("peers", peerstr)
         starting = true
     end
@@ -34,16 +35,51 @@ end
 
 ---@type function
 ---@param peer string
+---Add a peer to the list of peers
+---No op if the peer is already in the list
+function Gossip.add_peer(peer)
+    local peerstr = ngx.shared.gossip_data:get("peers")
+    ---@cast peerstr string
+    if peerstr:find(peer, 1, true) == nil then
+        ngx.shared.gossip_data:set("peers", peerstr .. peer .. ",")
+    end
+end
+
+---@type function
+---@param peer string
+---Remove a peer from the list of peers
+function Gossip.remove_peer(peer)
+    local peerstr = ngx.shared.gossip_data:get("peers")
+    ---@cast peerstr string
+    local pos, endpos = peerstr:find(peer, 1, true)
+    if not pos then
+        ngx.log(ngx.WARN, "Peer " .. peer .. " not found in peerstr: " .. peerstr)
+        return
+    end
+    -- Account for trailing comma
+    endpos = endpos + 1
+    local new_peerstr = peerstr:sub(1, pos - 1) .. peerstr:sub(endpos + 1)
+    if new_peerstr == "" then
+        -- the next call to peers() will reinitialize from the seed_peers
+        ngx.shared.gossip_data:set("peers", nil)
+    else
+        ngx.shared.gossip_data:set("peers", new_peerstr)
+    end
+end
+
+---@type function
+---@param peer string
 ---@return PeerData peerdata
 function Gossip.get_peerdata(peer)
     local epoch = ngx.shared.gossip_data:get("epoch:" .. peer)
     if not epoch then
-        return {epoch = -1, status = "unknown", timestamp = 0, server_version = "unknown"}
+        return {epoch = -1, status = "unknown", timestamp = 0, server_version = "unknown", failures = 0}
     end
     local status = ngx.shared.gossip_data:get("status:" .. peer)
     local timestamp = ngx.shared.gossip_data:get("timestamp:" .. peer)
     local server_version = ngx.shared.gossip_data:get("server_version:" .. peer)
-    return {epoch = epoch, status = status, timestamp = timestamp, server_version = server_version}
+    local failures = ngx.shared.gossip_data:get("failures:" .. peer)
+    return {epoch = epoch, status = status, timestamp = timestamp, server_version = server_version, failures = failures}
 end
 
 ---@type function
@@ -54,6 +90,7 @@ function Gossip.set_peerdata(peer, peerdata)
     ngx.shared.gossip_data:set("status:" .. peer, peerdata.status)
     ngx.shared.gossip_data:set("timestamp:" .. peer, peerdata.timestamp)
     ngx.shared.gossip_data:set("server_version:" .. peer, peerdata.server_version)
+    ngx.shared.gossip_data:set("failures:" .. peer, peerdata.failures)
 end
 
 ---@type function
@@ -69,15 +106,15 @@ function Gossip.update_peerdata(peer, peerdata)
             ngx.log(ngx.WARN, "Not adding new peer " .. peer .. " because it does not have the same security level as us")
             return
         end
+        if peerdata.failures > config.data.gossip_max_failures then
+            ngx.log(ngx.WARN, "Not adding new peer " .. peer .. " because it has failed " .. peerdata.failures .. " times")
+            return
+        end
         ngx.log(ngx.WARN, "Adding new peer " .. peer)
         -- Set its data first to reduce race conditions?
         Gossip.set_peerdata(peer, peerdata)
         -- Potential TODO: factor this out to a once-per-gossip update
-        local peerstr = ngx.shared.gossip_data:get("peers")
-        ---@cast peerstr string
-        if peerstr:find(peer, 0, true) == nil then
-            ngx.shared.gossip_data:set("peers", peerstr .. "," .. peer)
-        end
+        Gossip.add_peer(peer)
     else
         Gossip.set_peerdata(peer, peerdata)
     end
@@ -105,6 +142,7 @@ function Gossip.prepare_message()
     selfdata.status = "alive"
     selfdata.timestamp = ngx.now()
     selfdata.server_version = config.data.server_version
+    selfdata.failures = 0
     Gossip.set_peerdata(config.data.server_address, selfdata)
     table.insert(message, {
         name = config.data.server_address,
@@ -126,6 +164,23 @@ function Gossip.handle_message(message)
                 Gossip.update_peerdata(peerinfo.name, peerinfo.data)
             end
         end
+    end
+end
+
+---@type function
+---@param peer string
+---@param err string
+---Handle a failed gossip exchange with a peer or a failed redirect query
+function Gossip.handle_peer_error(peer, err)
+    local failures = ngx.shared.gossip_data:incr("failures:" .. peer, 1)
+    -- This ensures our opinion of the peer will propagate to others
+    -- There is a race condition here where two servers might increment the
+    -- failures at the same time, but this just undercounts the failures
+    ngx.shared.gossip_data:set("timestamp:" .. peer, ngx.now())
+    ngx.shared.gossip_data:set("status:" .. peer, "failed: " .. err)
+    if failures and failures >= config.data.gossip_max_failures then
+        ngx.log(ngx.WARN, "Peer " .. peer .. " failed " .. failures .. " times, removing from list")
+        Gossip.remove_peer(peer)
     end
 end
 

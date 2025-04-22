@@ -1,3 +1,4 @@
+import subprocess
 import time
 
 import httpx
@@ -34,6 +35,7 @@ def test_cluster_gossip(nginx_cluster, hepcdn_access_header):
                 "epoch",
                 "timestamp",
                 "server_version",
+                "failures",
             }
 
 
@@ -83,3 +85,37 @@ def test_cluster_redirect(nginx_cluster, wlcg_create_header, wlcg_read_header):
                     response.headers["Location"]
                     == f"{correctserver.podurl}webdav/unique_file{i}.txt"
                 )
+
+
+def test_cluster_drop_peer(nginx_cluster, hepcdn_access_header):
+    """
+    Test dropping a peer from the cluster.
+    """
+    server, peer, *_ = nginx_cluster
+    subprocess.check_call(
+        ["podman", "stop", peer.container_id], stdout=subprocess.DEVNULL
+    )
+
+    for _ in range(30):
+        try:
+            response = httpx.get(f"{peer.hosturl}gossip", headers=hepcdn_access_header)
+        except httpx.ConnectError:
+            # This is expected, as the peer is stopped
+            break
+    else:
+        assert False, "Peer is still reachable after stopping"
+
+    dropped = False
+    for _ in range(30):
+        response = httpx.get(f"{server.hosturl}gossip", headers=hepcdn_access_header)
+        peerlist = {item["name"]: item for item in response.json()}
+        if peer.podurl not in peerlist:
+            dropped = True
+            break
+        time.sleep(1)
+
+    subprocess.check_call(
+        ["podman", "start", peer.container_id], #stdout=subprocess.DEVNULL
+    )
+
+    assert dropped, "Peer was not dropped from the cluster"

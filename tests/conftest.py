@@ -362,6 +362,8 @@ def setup_cluster(build_container: None, oidc_mock_idp: MockIdP):
             "openidc_iss": oidc_mock_idp.iss,
             "openidc_pubkey": oidc_mock_idp.public_key_pem,
             "gossip_delay": 1,
+            "gossip_fraction": 0.5,
+            "gossip_max_failures": 1,
             "openidc_client_id": f"nginx{i}",
             "openidc_client_secret": f"nginx{i}_secret",
             "health_check_id": random.randint(0, 1024 * 1024 * 1024),
@@ -402,6 +404,7 @@ def setup_cluster(build_container: None, oidc_mock_idp: MockIdP):
         container_id = subprocess.check_output(podman_cmd).decode().strip()
         container_ids.append(container_id)
 
+    time.sleep(1)
     yield [
         ServerInstance(
             port=8580 + i,

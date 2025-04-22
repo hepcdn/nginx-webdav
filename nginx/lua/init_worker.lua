@@ -25,7 +25,6 @@ local token_userpass = config.data.openidc_client_id .. ":" .. config.data.openi
 ---@param token string
 local function peer_exchange_gossip(peer, message, token)
     local httpc = resty_http.new()
-    -- TODO: handle connection refused
     local res, err = httpc:request_uri(peer .. "gossip", {
         method = "POST",
         body = message,
@@ -39,16 +38,21 @@ local function peer_exchange_gossip(peer, message, token)
     })
     if not res then
         local errmsg = "Failed to send gossip message to " .. peer .. ": " .. err
-        --gossip.handle_peer_error(peer, errmsg)
-        ngx.log(ngx.ERR, errmsg)
+        ngx.log(ngx.WARN, errmsg)
+        gossip.handle_peer_error(peer, err)
+        return
     end
     if res.status ~= 200 then
         local errmsg = "Failed to send gossip message to " .. peer .. ": " .. res.status
-        ngx.log(ngx.ERR, errmsg)
+        ngx.log(ngx.WARN, errmsg)
+        gossip.handle_peer_error(peer, "Response status " .. res.status)
+        return
     end
     if res.body == "" then
         local errmsg = "Empty response from " .. peer
-        ngx.log(ngx.ERR, errmsg)
+        ngx.log(ngx.WARN, errmsg)
+        gossip.handle_peer_error(peer, "Empty response")
+        return
     end
     gossip.handle_message(res.body)
 end
