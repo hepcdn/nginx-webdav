@@ -25,6 +25,9 @@ local token_userpass = config.data.openidc_client_id .. ":" .. config.data.openi
 ---@param token string
 local function peer_exchange_gossip(peer, message, token)
     local httpc = resty_http.new()
+    -- timeouts (connect, send, read) are in milliseconds
+    httpc:set_timeouts(config.data.gossip_timeout, config.data.gossip_timeout, config.data.gossip_timeout)
+    ngx.log(ngx.INFO, "Sending gossip message to ", peer)
     local res, err = httpc:request_uri(peer .. "gossip", {
         method = "POST",
         body = message,

@@ -1,6 +1,7 @@
 local gossip = require("gossip")
 
--- Handle posted message
+-- If the request method is a POST, then it is a peer
+-- contacting us with its gossip update and we need to handle it
 if ngx.var.request_method == "POST" then
     ngx.req.read_body()
     local data = ngx.req.get_body_data()

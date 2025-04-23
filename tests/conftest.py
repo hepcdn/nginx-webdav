@@ -364,6 +364,7 @@ def setup_cluster(build_container: None, oidc_mock_idp: MockIdP):
             "gossip_delay": 1,
             "gossip_fraction": 0.5,
             "gossip_max_failures": 1,
+            "gossip_timeout": 100,
             "openidc_client_id": f"nginx{i}",
             "openidc_client_secret": f"nginx{i}_secret",
             "health_check_id": random.randint(0, 1024 * 1024 * 1024),
