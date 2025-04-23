@@ -20,6 +20,7 @@ local Config = {
         gossip_fraction = 0.1, -- fraction of peers to gossip to
         gossip_max_failures = 5, -- max failures before removing a peer
         gossip_timeout = 5000, -- in milliseconds
+        peer_query_timeout = 5000, -- in milliseconds
 
         -- This is used in webdav_write_content and webdav_tpc_content
         receive_buffer_size = 1024*1024,

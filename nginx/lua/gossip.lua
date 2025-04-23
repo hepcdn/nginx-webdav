@@ -110,7 +110,7 @@ function Gossip.update_peerdata(peer, peerdata)
             ngx.log(ngx.WARN, "Not adding new peer " .. peer .. " because it has failed " .. peerdata.failures .. " times")
             return
         end
-        ngx.log(ngx.WARN, "Adding new peer " .. peer)
+        ngx.log(ngx.NOTICE, "Adding new peer " .. peer)
         -- Set its data first to reduce race conditions?
         Gossip.set_peerdata(peer, peerdata)
         -- Potential TODO: factor this out to a once-per-gossip update
@@ -179,7 +179,7 @@ function Gossip.handle_peer_error(peer, err)
     ngx.shared.gossip_data:set("timestamp:" .. peer, ngx.now())
     ngx.shared.gossip_data:set("status:" .. peer, "failed: " .. err)
     if failures and failures >= config.data.gossip_max_failures then
-        ngx.log(ngx.WARN, "Peer " .. peer .. " failed " .. failures .. " times, removing from list")
+        ngx.log(ngx.NOTICE, "Peer " .. peer .. " failed " .. failures .. " times, removing from list")
         Gossip.remove_peer(peer)
     end
 end
