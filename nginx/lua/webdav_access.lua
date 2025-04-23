@@ -22,6 +22,9 @@ if err or not res then
     return ngx.exit(ngx.OK)
 end
 
+-- Set the oidc_user, for use in access log
+ngx.var.oidc_user = res.sub
+
 -- From https://github.com/WLCG-AuthZ-WG/common-jwt-profile/blob/master/profile.md#capability-based-authorization-scope
 
 -- storage.read: Read data. Only applies to “online” resources such as disk (as opposed to “nearline” such as tape where the stage authorization should be used in addition).

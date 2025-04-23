@@ -22,6 +22,9 @@ if err or not res then
     return ngx.exit(ngx.OK)
 end
 
+-- Set the oidc_user, for use in access log
+ngx.var.oidc_user = res.sub
+
 if string.find(res.scope, "hepcdn.access") == nil then
     ngx.status = ngx.HTTP_FORBIDDEN
     ngx.say("no permission to read this resource")
