@@ -23,6 +23,7 @@ end
 ---@return {peer: string, location: string?} res Response from peer
 local function peer_query_file(peer, uri, token)
     local httpc = resty_http.new()
+    httpc:set_timeouts(config.data.peer_query_timeout, config.data.peer_query_timeout, config.data.peer_query_timeout)
     -- peer has trailing slash, uri has leading slash
     local location = peer .. uri:sub(2)
     ngx.log(ngx.NOTICE, "Querying location: ", location)
@@ -35,7 +36,7 @@ local function peer_query_file(peer, uri, token)
     })
     if not res then
         ngx.log(ngx.ERR, "Failed to send file query to " .. peer .. ": " .. err)
-        -- TODO: update peer status for gossip (unreachable)
+        gossip.handle_peer_error(peer, err)
         return {peer = peer, location = nil}
     end
     if res.status == ngx.HTTP_OK then

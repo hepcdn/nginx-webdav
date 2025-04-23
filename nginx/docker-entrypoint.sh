@@ -46,7 +46,7 @@ fi
 
 if [ "$DEBUG" == "true" ]; then
   cat <<EOF >> /etc/nginx/conf.d/site.conf
-error_log stderr notice;
+error_log stderr info;
 
 server {
     lua_code_cache off;
