@@ -49,6 +49,8 @@ end
 ---@param peer string
 ---Remove a peer from the list of peers
 function Gossip.remove_peer(peer)
+    -- Flush any timestamp
+    ngx.shared.gossip_data:set("timestamp:" .. peer, nil)
     local peerstr = ngx.shared.gossip_data:get("peers")
     ---@cast peerstr string
     local pos, endpos = peerstr:find(peer, 1, true)

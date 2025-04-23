@@ -115,7 +115,17 @@ def test_cluster_drop_peer(nginx_cluster, hepcdn_access_header):
         time.sleep(1)
 
     subprocess.check_call(
-        ["podman", "start", peer.container_id], #stdout=subprocess.DEVNULL
+        ["podman", "start", peer.container_id], stdout=subprocess.DEVNULL
     )
 
     assert dropped, "Peer was not dropped from the cluster"
+
+    for _ in range(30):
+        response = httpx.get(f"{server.hosturl}gossip", headers=hepcdn_access_header)
+        peerlist = {item["name"]: item for item in response.json()}
+        if peer.podurl in peerlist:
+            dropped = False
+            break
+        time.sleep(1)
+
+    assert not dropped, "Peer was not re-added to the cluster after restart"
