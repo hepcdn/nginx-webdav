@@ -55,7 +55,7 @@ function Gossip.remove_peer(peer)
     ---@cast peerstr string
     local pos, endpos = peerstr:find(peer, 1, true)
     if not pos then
-        ngx.log(ngx.WARN, "Peer " .. peer .. " not found in peerstr: " .. peerstr)
+        ngx.log(ngx.WARN, "Logic error: peer " .. peer .. " not found in peerstr: " .. peerstr)
         return
     end
     -- Account for trailing comma
