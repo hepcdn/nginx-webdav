@@ -37,20 +37,18 @@ local function third_party_pull(source_uri, destination_localpath, redirects)
         ngx.say("failure: failed to parse URI: " .. err)
         return ngx.exit(ngx.OK)
     end
-    local scheme, host, port, path = table.unpack(parsed_uri)
-    local ok, err, ssl_session = httpc:connect({
-        scheme = scheme,
-        host = host,
-        port = port,
+    local params = {
         ssl_verify = true,
-    })
+    }
+    params.scheme, params.host, params.port, params.path, params.query = table.unpack(parsed_uri)
+    params.ssl_server_name = params.host
+    local ok, err, ssl_session = httpc:connect(params)
     if not ok then
-        ngx.say("failure: connection to " .. host .. ":" .. port .. " failed: " .. err)
+        ngx.say("failure: connection to " .. params.host .. ":" .. params.port .. " failed: " .. err)
         return ngx.exit(ngx.OK)
     end
 
     local headers = {
-        ["Host"] = host,
         ["User-Agent"] = "nginx-webdav/" .. config.data.server_version,
     }
     if verify_checksum then
@@ -59,13 +57,11 @@ local function third_party_pull(source_uri, destination_localpath, redirects)
     if ngx.var.http_transferheaderauthorization then
         headers["Authorization"] = ngx.var.http_transferheaderauthorization
     end
+    params.headers = headers
     local res = nil
-    res, err = httpc:request({
-        path = path,
-        headers = headers,
-    })
+    res, err = httpc:request(params)
     if not res then
-        ngx.say("failure: request to " .. host .. ":" .. port .. " for path " .. path .. " failed: " .. err)
+        ngx.say("failure: request to " .. params.host .. ":" .. params.port .. " for path " .. params.path .. " failed: " .. err)
         return ngx.exit(ngx.OK)
     end
 
@@ -78,6 +74,9 @@ local function third_party_pull(source_uri, destination_localpath, redirects)
     if res.status ~= 200 then
         ngx.status = res.status
         ngx.say("failure: rejected GET: ", res.reason)
+        -- read the body so we can re-use the connection
+        res:read_body()
+        httpc:set_keepalive()
         return ngx.exit(res.status)
     end
 
