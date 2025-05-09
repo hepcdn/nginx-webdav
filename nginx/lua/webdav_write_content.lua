@@ -102,7 +102,7 @@ if err then
 end
 
 local digest = nil
-if ngx.var.http_want_digest == "adler32" then
+if string.lower(ngx.var.http_want_digest or "") == "adler32" then
     digest = string.format("adler32=%s", adler32)
 end
 
