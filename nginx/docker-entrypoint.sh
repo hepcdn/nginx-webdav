@@ -65,10 +65,11 @@ export SSL_CERT_DIR=$SSL_CERT_DIR
 # use a non-standard port in case we are not running as root
 # if we are ipv4 only, filter AAAA records
 if [ "$IPV4ONLY" == "true" ]; then
-  dnsmasq -kd -p 5353 --filter-AAAA &
-else
-  dnsmasq -kd -p 5353 &
+  # This is only available in version 2.87+ (current is 2.85)
+  # dnsmasq -kd -p 5353 --filter-AAAA &
+  echo "IPV4ONLY not available yet, using default dnsmasq"
 fi
+dnsmasq -kd -p 5353 &
 
 # Run target executable (probably nginx)
 exec "$@"
