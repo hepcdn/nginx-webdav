@@ -2,7 +2,7 @@
 FROM docker.io/almalinux:9 as build
 
 ARG RESTY_VERSION="1.27.1.1"
-ARG RESTY_LUAROCKS_VERSION="3.11.1"
+ARG RESTY_LUAROCKS_VERSION="3.12.0"
 # TODO: arch specific build
 
 WORKDIR /usr/local/src
