@@ -26,7 +26,7 @@ end
 ngx.var.oidc_user = res.sub
 
 local is_read = ngx.var.request_method == "GET" or ngx.var.request_method == "HEAD"
-if is_read and string.find(res.scope, "hepcdn.view") == nil then
+if is_read and string.find(res.scope, "hepcdn.view") == nil and string.find(res.scope, "hepcdn.access") == nil then
     ngx.status = ngx.HTTP_FORBIDDEN
     ngx.say("no permission to read this resource")
     return ngx.exit(ngx.OK)
