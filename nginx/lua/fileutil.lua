@@ -134,7 +134,8 @@ function fileutil.sink_to_file(file_path, reader, perfmarkers)
     repeat
         buffer, err = reader(config.data.receive_buffer_size)
         if err then
-            return "failed to read from the request socket: " .. err
+            err = "failed to read from the request socket: " .. err
+            goto cleanup
         end
         local now = ngx.now()
         if buffer then
@@ -143,7 +144,8 @@ function fileutil.sink_to_file(file_path, reader, perfmarkers)
             last_transferred = now
             cksumutil.adler32_increment(adler_state, buffer)
             if not file then
-                return "failed to write to the file: " .. err
+                err = "failed to write to the file: " .. err
+                goto cleanup
             end
         end
         if perfmarkers and last_perfmarker + config.data.performance_marker_timeout <= now then
@@ -151,15 +153,26 @@ function fileutil.sink_to_file(file_path, reader, perfmarkers)
             last_perfmarker = now
         end
     until not buffer
-
-    local adler32 = cksumutil.adler32_to_string(adler_state)
-    cksumutil.set_adler32(file_path, adler32)
+    ::cleanup::
 
     local suc, exitcode = file:close()
     if not suc then
-      return "failed to close " .. file_path .. ": " .. exitcode
+        -- This is more of an internal error
+        ngx.log(ngx.ERR, "failed to close " .. file_path .. ": " .. exitcode)
+        err = err or ("failed to close file: " .. exitcode)
     end
 
+    if err then
+        local rmerr
+        suc, rmerr = os.remove(file_path)
+        if not suc then
+            ngx.log(ngx.ERR, "failed to cleanup " .. file_path .. ": " .. rmerr)
+        end
+        return err
+    end
+
+    local adler32 = cksumutil.adler32_to_string(adler_state)
+    cksumutil.set_adler32(file_path, adler32)
     ngx.log(ngx.NOTICE, bytes_written, " total bytes written to ", file_path, " with adler32 ", adler32)
     return nil, adler32
 end
