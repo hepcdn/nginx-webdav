@@ -269,6 +269,7 @@ def setup_server(build_container: None, oidc_mock_idp: MockIdP):
         "openidc_pubkey": oidc_mock_idp.public_key_pem,
         "openidc_client_id": "nginx1",
         "openidc_client_secret": "nginx1_secret",
+        "public_client_id": "test_public_client_id",
         "receive_buffer_size": 4096,
         # Give the container a (hopefully) unique ID that is returned in a
         # health check so that we can verify that the service we started is the
@@ -298,9 +299,8 @@ def setup_server(build_container: None, oidc_mock_idp: MockIdP):
         "nginx-unit-test-container",
     ]
     podman_cmd.append("nginx-webdav")
+    container_id = subprocess.check_output(podman_cmd).decode().strip()
     try:
-        container_id = subprocess.check_output(podman_cmd).decode().strip()
-
         subprocess.run(
             [
                 "podman",
@@ -367,6 +367,7 @@ def setup_cluster(build_container: None, oidc_mock_idp: MockIdP):
             "gossip_timeout": 100,
             "openidc_client_id": f"nginx{i}",
             "openidc_client_secret": f"nginx{i}_secret",
+            "public_client_id": "test_public_client_id",
             "health_check_id": random.randint(0, 1024 * 1024 * 1024),
         }
         with open(f"nginx/lua/config{i}.json", "w") as f:
