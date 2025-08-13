@@ -2,7 +2,7 @@
 FROM docker.io/almalinux:9 as build
 
 ARG RESTY_VERSION="1.27.1.1"
-ARG RESTY_LUAROCKS_VERSION="3.11.1"
+ARG RESTY_LUAROCKS_VERSION="3.12.0"
 # TODO: arch specific build
 
 WORKDIR /usr/local/src
@@ -66,7 +66,8 @@ ENV LUA_CPATH="/usr/local/openresty/site/lualib/?.so;/usr/local/openresty/lualib
 
 RUN mkdir -p /var/run/openresty \
     && ln -sf /dev/stdout /usr/local/openresty/nginx/logs/access.log \
-    && ln -sf /dev/stderr /usr/local/openresty/nginx/logs/error.log
+    && ln -sf /dev/stderr /usr/local/openresty/nginx/logs/error.log \
+    && rm -f /usr/local/openresty/nginx/html/*
 
 # Copy nginx configuration files
 COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
@@ -74,6 +75,8 @@ COPY nginx.conf /usr/local/openresty/nginx/conf/nginx.conf
 COPY conf.d /etc/nginx/conf.d
 
 COPY lua /etc/nginx/lua
+
+COPY html /usr/local/openresty/nginx/html
 
 # Make some directories writeable by non-root users
 RUN chgrp -R 0 /var/run/openresty/ && \

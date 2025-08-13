@@ -1,4 +1,4 @@
-nging/lua/config.json
+nginx/lua/config.json
 *.pyc
 data/
 .vscode/

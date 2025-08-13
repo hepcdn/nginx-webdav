@@ -4,7 +4,7 @@ local config = require("config")
 
 if not ngx.var.http_authorization then
     ngx.status = ngx.HTTP_UNAUTHORIZED
-    ngx.header["WWW-Authenticate"] = 'Bearer realm=storage'
+    ngx.header["WWW-Authenticate"] = 'Bearer realm=hepcdn'
     ngx.say("no authorization header provided")
     return ngx.exit(ngx.OK)
 end
@@ -25,8 +25,16 @@ end
 -- Set the oidc_user, for use in access log
 ngx.var.oidc_user = res.sub
 
-if string.find(res.scope, "hepcdn.access") == nil then
+local is_read = ngx.var.request_method == "GET" or ngx.var.request_method == "HEAD"
+if is_read and string.find(res.scope, "hepcdn.view") == nil and string.find(res.scope, "hepcdn.access") == nil then
     ngx.status = ngx.HTTP_FORBIDDEN
     ngx.say("no permission to read this resource")
+    return ngx.exit(ngx.OK)
+end
+
+local is_post = ngx.var.request_method == "POST"
+if is_post and string.find(res.scope, "hepcdn.access") == nil then
+    ngx.status = ngx.HTTP_FORBIDDEN
+    ngx.say("no permission to modify this resource")
     return ngx.exit(ngx.OK)
 end

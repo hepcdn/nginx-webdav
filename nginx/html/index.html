@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebDAV Server - Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Login Section -->
+      <div id="login-section" class="section">
+        <h1>WebDAV Server Dashboard</h1>
+        <p>Please login to access the dashboard.</p>
+        <button id="login-btn" class="btn btn-primary">
+          Login with OpenID Connect
+        </button>
+      </div>
+
+      <!-- Dashboard Section -->
+      <div id="dashboard-section" class="section hidden">
+        <div class="header">
+          <h1>WebDAV Server Dashboard</h1>
+          <div class="user-info">
+            <span id="user-name">User</span>
+            <button id="logout-btn" class="btn btn-secondary">Logout</button>
+          </div>
+        </div>
+
+        <div class="content">
+          <div class="gossip-section">
+            <h2>Gossip Data</h2>
+            <button id="refresh-gossip" class="btn btn-primary">
+              Refresh Data
+            </button>
+            <div id="gossip-status" class="status"></div>
+            <div id="gossip-data" class="data-container"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Loading Section -->
+      <div id="loading-section" class="section hidden">
+        <div class="loading">
+          <h2>Loading...</h2>
+          <p>Processing authentication...</p>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/oidc-client-ts@3.3.0/dist/browser/oidc-client-ts.min.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

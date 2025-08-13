@@ -51,6 +51,9 @@ LwIDAQAB
         openidc_client_id = "",
         openidc_client_secret = "",
 
+        -- Public client ID for frontend OIDC authentication
+        public_client_id = "",
+
        -- To be able to confirm that the test server is the same one we spoke
        -- to, have the health check reply this ID. So the test sets the ID and
        -- the service replies with the same number

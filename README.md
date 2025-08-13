@@ -34,14 +34,17 @@ to set additional configuration options, including secrets needed to join a clus
 {
    "seed_peers": "https://cms-hepcdn.web.cern.ch/",
    "openidc_client_id": "my_client_id",
-   "openidc_client_secret": "my_client_secret"
+   "openidc_client_secret": "my_client_secret",
+   "public_client_id": "my_public_client_id"
 }
 ```
-You can get a client id by going to the CMS IAM self-service
+You can get an `openidc_client_id` by going to the CMS IAM self-service
 [client registration page](https://cms-auth.cern.ch/dashboard#!/home/newClient).
 The client will only need two scopes: `hepcdn.access` (create a custom scope) and `storage.read:/`.
 You can view the generated client secret in the "Credentials" tab. Make sure to enable
-`client_credentials` in the "Grant types" tab.
+`client_credentials` in the "Grant types" tab. For the frontend dashboard, we recommend
+setting up a second public client with the scopes `openid profile storage.read:/ hepcdn.view`.
+This allows authenticated users to view the cluster topology and access files via a web dashboard.
 
 The full list of json configuration settings can be seen in `nginx/lua/config.lua`
 
@@ -62,6 +65,7 @@ podman run -d -p 8080:8080 \
    -v ./nginx/conf.d:/etc/nginx/conf.d:Z \
    -v ./nginx/lua:/etc/nginx/lua:Z \
    -v ./data:/var/www/webdav:Z \
+   -v ./nginx/html:/usr/local/openresty/nginx/html:Z \
    -e DEBUG=true \
    nginx-webdav
 ```
