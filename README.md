@@ -81,6 +81,23 @@ pip install -r tests/requirements.txt
 pytest
 ```
 
+## Request flow
+
+```mermaid
+flowchart TD
+    req(["Client request"])
+    req --> endpoint{"URL prefix"}
+
+    endpoint -- /webdav --> method{"HTTP method"}
+    method -- GET/HEAD --> webdav_read(["Serve with nginx"])
+    method -- PUT/DELETE --> stream["Stream from client"] --> webdav_write(["Sink to file"])
+    method -- COPY --> webdav_tpc{"TPC mode"} -- pull --> push["GET remote URL, stream response"] --> webdav_write
+
+    endpoint -- /redirect --> local_check{"Is file local?"}
+    local_check -- no --> redirect_query["Query all peer servers"] --> redirect_end(["Redirect to first responding peer"])
+    local_check -- yes --> redirect_local(["Redirect to /webdav"])
+```
+
 ## Usage examples
 
 For usage with CMS auth, first, get a valid token, e.g. with [oidc-agent](https://wlcg-authz-wg.github.io/wlcg-authz-docs/token-based-authorization/oidc-agent/). Set it's value to the `$BEARER_TOKEN` environment variable, e.g. with `export BEARER_TOKEN=$(oidc-token tokenname)`. You can set up local tokens with the following:
