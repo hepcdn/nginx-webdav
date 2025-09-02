@@ -81,7 +81,9 @@ pip install -r tests/requirements.txt
 pytest
 ```
 
-## Request flow
+## Main workflows in this system
+
+### Client request flow
 
 ```mermaid
 flowchart TD
@@ -96,6 +98,23 @@ flowchart TD
     endpoint -- /redirect --> local_check{"Is file local?"}
     local_check -- no --> redirect_query["Query all peer servers"] --> redirect_end(["Redirect to first responding peer"])
     local_check -- yes --> redirect_local(["Redirect to /webdav"])
+
+    endpoint -- /gossip --> gmethod{"HTTP method"}
+    gmethod -- POST --> handler["Merge client peer list with ours"] --> greply
+    gmethod -- GET --> greply(["Return list of known peers"])
+```
+
+### Gossip loop flow
+```mermaid
+flowchart TD
+    start(["Start worker"])
+    start --> token{"Check token validity"}
+    token -- expires soon --> refresh["Refresh token (client credential flow)"] --> prepare
+    token -- valid --> prepare["Prepare list of all known peers"]
+    prepare --> choose["Choose random subset of peers to update"]
+    choose --> send["POST gossip message to peer /gossip endpoint"]
+    send --> read["Read reply, merge with our list"]
+    read --> delay@{ shape: delay, label: "Delay" } --> token
 ```
 
 ## Usage examples
