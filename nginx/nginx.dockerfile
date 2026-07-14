@@ -1,8 +1,8 @@
-# Heavily based on https://github.com/openresty/docker-openresty/blob/master/centos/Dockerfile
+# Heavily based on https://github.com/openresty/docker-openresty/blob/master/alma/Dockerfile
 FROM docker.io/almalinux:9 as build
 
-ARG RESTY_VERSION="1.27.1.1"
-ARG RESTY_LUAROCKS_VERSION="3.12.0"
+ARG RESTY_VERSION="1.31.1.1"
+ARG RESTY_LUAROCKS_VERSION="3.13.0"
 # TODO: arch specific build
 
 WORKDIR /usr/local/src
@@ -15,7 +15,7 @@ COPY set-default-verify-dir.patch .
 RUN curl -Ol https://openresty.org/download/openresty-${RESTY_VERSION}.tar.gz \
     && tar -xzf openresty-${RESTY_VERSION}.tar.gz \
     && cd openresty-${RESTY_VERSION} \
-    && patch bundle/nginx-1.27.1/src/event/ngx_event_openssl.c ../set-default-verify-dir.patch \
+    && patch bundle/nginx-1.31.1/src/event/ngx_event_openssl.c ../set-default-verify-dir.patch \
     && ./configure \
         --prefix=/usr/local/openresty \
         --with-pcre-jit \
