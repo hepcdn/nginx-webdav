@@ -1,0 +1,3 @@
+[v3_voms]
+# Real VOMS extension OID
+1.3.6.1.4.1.8005.100.100.5 = ASN1:UTF8String:/cms/Role=NULL/Capability=NULL

@@ -15,6 +15,21 @@ if [ "$USE_SSL" == "true" ]; then
   if [ -z "$SERVER_ADDRESS" ]; then
     export SERVER_ADDRESS="https://${SERVER_NAME}:$PORT/"
   fi
+  # Build CA bundle from SSL_CERT_DIR for client cert verification
+  SSL_CA_BUNDLE="/tmp/ca-bundle.pem"
+  > "$SSL_CA_BUNDLE"  # Create empty bundle
+  if [ -d "$SSL_CERT_DIR" ]; then
+      for cert_file in "$SSL_CERT_DIR"/*.pem "$SSL_CERT_DIR"/*.crt; do
+          if [ -f "$cert_file" ]; then
+              cat "$cert_file" >> "$SSL_CA_BUNDLE"
+          fi
+      done
+  fi
+
+  # If $SERVER_ADDRESS is not set, autogenerate it with a guess
+  if [ -z "$SERVER_ADDRESS" ]; then
+    export SERVER_ADDRESS="https://${SERVER_NAME}:$PORT/"
+  fi
   cat <<EOF > /etc/nginx/conf.d/site.conf
 server {
     listen              $PORT ssl;
@@ -24,6 +39,8 @@ server {
     ssl_certificate_key $SSL_HOST_KEY;
     ssl_protocols       TLSv1.2 TLSv1.3;
     ssl_ciphers         HIGH:!aNULL:!MD5;
+    ssl_verify_client   optional;
+    ssl_client_certificate $SSL_CA_BUNDLE;
 
     include /etc/nginx/conf.d/include/locations.conf;
 }
