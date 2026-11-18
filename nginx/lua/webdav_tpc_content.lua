@@ -122,5 +122,12 @@ if ngx.var.request_method == "COPY" then
         return ngx.exit(ngx.OK)
     end
 
-    third_party_pull(ngx.var.http_source, fileutil.get_request_local_path())
+    local file_path, path_err = fileutil.get_request_local_path()
+    if not file_path then
+        ngx.status = ngx.HTTP_BAD_REQUEST
+        ngx.say(path_err)
+        return ngx.exit(ngx.OK)
+    end
+
+    third_party_pull(ngx.var.http_source, file_path)
 end

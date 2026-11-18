@@ -6,7 +6,10 @@ local gossip = require("gossip")
 
 
 -- TODO: always "redirect"?
-local path = ngx.var.request_uri:sub(#"/redirect" + 1)
+-- Use ngx.var.uri (decoded, normalized, without query string) rather than
+-- ngx.var.request_uri: the query string is client controlled and must not
+-- influence which file is stat'd or what the Location header points at.
+local path = ngx.var.uri:sub(#"/redirect" + 1)
 local webdav_uri = config.data.uriprefix .. path
 local stat = fileutil.get_metadata(config.data.local_path .. path, false)
 if stat.exists then

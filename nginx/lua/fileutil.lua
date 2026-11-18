@@ -4,12 +4,49 @@ local cksumutil = require("cksumutil")
 
 local fileutil = {}
 
+-- Prefixes of the internal locations that handle webdav requests
+-- (see nginx/conf.d/default.conf and nginx/conf.d/include/locations.conf)
+local webdav_location_prefixes = {
+    "/webdav_read",
+    "/webdav_write",
+    "/webdav_tpc",
+    "/webdav",
+}
+
 ---@type function
----@return string
+---@return string? file_path, string? err
 function fileutil.get_request_local_path()
-    local uri = ngx.var.request_uri
-    -- TODO: can we find the local path from ngx.var variables?
-    return config.data.local_path .. uri:sub(#config.data.uriprefix + 1)
+    -- Use ngx.var.uri (the current request URI) instead of
+    -- ngx.var.request_uri (the original request line). ngx.var.uri is
+    -- percent-decoded, normalized by nginx, and does not include the
+    -- query string. This matters for two reasons:
+    --
+    -- 1. Security: the query string is fully client controlled. Building
+    --    the filesystem path from ngx.var.request_uri let clients inject
+    --    path components into the path, e.g.
+    --    `PUT /webdav/f?../../../etc/pwned` wrote to /etc/pwned, because
+    --    the kernel resolves `..` in the query portion of the path.
+    -- 2. Consistency: the read path (static module) also resolves the
+    --    decoded URI, so a GET and a PUT of the same URL now hit the same
+    --    file (previously `PUT /webdav/a%20b.txt` wrote a file literally
+    --    named `a%20b.txt` while the GET read `a b.txt`).
+    --
+    -- By the time we run, the request has been rewritten into one of the
+    -- internal locations, so strip that prefix rather than the original
+    -- /webdav prefix from the request line.
+    local uri = ngx.var.uri
+    for _, prefix in ipairs(webdav_location_prefixes) do
+        local rest = uri:sub(#prefix + 1)
+        if uri:sub(1, #prefix) == prefix and (rest == "" or rest:sub(1, 1) == "/") then
+            -- Defense in depth: nginx has already normalized the URI
+            -- (rejecting or resolving `..`), so this should never fire.
+            if rest:find("/..", 1, true) then
+                return nil, "invalid path in request URI"
+            end
+            return config.data.local_path .. rest
+        end
+    end
+    return nil, "unrecognized location for request URI: " .. uri
 end
 
 ---@type function

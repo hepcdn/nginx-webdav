@@ -3,7 +3,12 @@ local config = require("config")
 local http = require("resty.http")
 local fileutil = require("fileutil")
 
-local file_path = fileutil.get_request_local_path()
+local file_path, path_err = fileutil.get_request_local_path()
+if not file_path then
+    ngx.status = ngx.HTTP_BAD_REQUEST
+    ngx.say(path_err)
+    return ngx.exit(ngx.OK)
+end
 local metadata = fileutil.get_metadata(file_path, false)
 
 if ngx.var.request_method == "DELETE" then
