@@ -17,59 +17,54 @@ The current gossip protocol implementation uses a shared JWT bearer token for au
 
 ## Proposed Solution
 
-Use **certificate-bound JWT assertions** for gossip peer authentication:
+Use **OAuth 2.0 Mutual-TLS Client Authentication and Certificate-Bound Access Tokens** (RFC 8705), which is supported by the CMS IAM (INDIGO IAM v1.15.0+).
 
-1. Each node presents its IGTF host certificate during peer authentication
-2. Nodes sign gossip messages with their certificate's private key
-3. JWT claims are validated separately for authorization
-4. Peer identity is derived from the certificate, not the JWT
-
-This provides:
+Each node presents its IGTF host certificate during mutual TLS to the IAM, which binds the issued JWT to the certificate by embedding its thumbprint. This provides:
 - **Unique peer identity** (from certificate subject DN)
 - **Authorization claims** (from JWT scopes)
-- **Binding between identity and claims** (via signed assertions)
+- **Binding between identity and claims** (JWT contains certificate thumbprint)
 - **No shared secrets** (each node has its own certificate/key pair)
 
 ## Architecture
 
-### Peer Authentication Flow
+### Token Request Flow (mTLS)
 
-1. **Initial contact**: Node A wants to gossip with Node B
-2. **Challenge**: Node B sends a random nonce to Node A
-3. **Signed response**: Node A signs the nonce + timestamp + JWT subject with its TLS private key, returns signature + certificate
-4. **Verification**: Node B verifies:
-   - Signature is valid using Node A's certificate
-   - Certificate chains to IGTF root CA
-   - Certificate subject matches expected peer identity
-   - Timestamp is recent (replay protection)
-5. **JWT validation**: Node B separately validates the JWT claims for authorization
+1. Node establishes mTLS connection to CMS IAM using its IGTF host certificate
+2. Node requests JWT via `client_credentials` grant over the mTLS connection
+3. CMS IAM issues JWT with certificate thumbprint embedded in `cnf` claim:
+   ```json
+   {
+     "sub": "node1",
+     "scope": "hepcdn.access",
+     "cnf": {
+       "x5t#S256": "m8UcWBSPNtaKN19TdR8zUHvWWOSCSX9nsa5vU6fscd0"
+     }
+   }
+   ```
 
-### Gossip Message Format
+### Gossip Message Flow
 
-Each gossip message includes:
-```json
-{
-  "peers": [...],
-  "signature": "base64(SHA256(message) signed with cert private key)",
-  "cert_fingerprint": "sha256:abc123..."
-}
-```
+1. Node signs gossip message with its certificate private key
+2. Node sends gossip message + JWT + certificate to peer
+3. Peer verifies:
+   - JWT is valid (signature, issuer, expiration)
+   - Gossip message signature matches the certificate
+   - JWT `cnf.x5t#S256` thumbprint matches the certificate's actual fingerprint
 
 ### Implementation Components
 
 1. **`cert_auth.lua`** - Certificate authentication functions
    - Load certificate/key pairs
    - Sign/verify messages
-   - Validate certificate chains
+   - Compute certificate fingerprints
 
 2. **`gossip_auth.lua`** - Gossip-specific authentication
-   - Challenge-response protocol
+   - JWT validation with certificate binding
    - Peer identity verification
-   - Token binding validation
 
 3. **Updated `gossip.lua`** - Use cert-based auth instead of shared token
-4. **Updated `gossip_content.lua`** - Verify incoming gossip signatures
-5. **Updated `init_worker.lua`** - Use cert-based peer exchange
+4. **Updated `gossip_content.lua`** - Verify incoming gossip signatures and JWT binding
+5. **Updated `init_worker.lua`** - Use mTLS for token requests and cert-based peer exchange
 
 ## Testing Strategy
 
@@ -81,6 +76,6 @@ Each gossip message includes:
 ## Mock Infrastructure
 
 For testing, we'll create:
-- Mock OIDC issuer (Python Flask/FastAPI service)
+- Mock OIDC issuer (Python HTTP server)
 - Mock CA with self-signed certificates
 - Test fixtures for various certificate scenarios
