@@ -1,26 +1,37 @@
 /*
  * as_user.c — run a small set of filesystem operations with a mapped unix
- * user's effective credentials, then restore root.
+ * user's effective credentials, then restore the worker's identity.
  *
- * nginx workers run as root (real uid 0, see nginx/conf.d/default.conf). A
- * request authenticated by a remote token may need to create/read files as
- * the mapped user so that POSIX ownership, permissions and quotas apply.
+ * nginx workers run as root (real uid 0, see nginx/conf.d/default.conf) or,
+ * in the planned future deployment, as a non-root user that holds the
+ * CAP_SETUID/CAP_SETGID capabilities in its effective set (e.g. via file
+ * capabilities on the binary: setcap cap_setuid,cap_setgid+ep). A request
+ * authenticated by a remote token may need to create/read files as the
+ * mapped user so that POSIX ownership, permissions and quotas apply.
  * Only the open/metadata syscalls need the user's identity: Linux checks
  * DAC at open() time, and read()/write() on an already-open fd are not
- * re-checked, so the worker can stream data as root over the returned fd.
+ * re-checked, so the worker can stream data over the returned fd without
+ * being switched.
  *
  * Safety invariants (critical for use from nginx):
  *  - Every exported function is one straight-line C sequence:
- *    validate -> setegid -> seteuid -> one syscall -> seteuid(0) ->
- *    setegid(0) -> return. It never allocates, sleeps or re-enters any
+ *    validate -> setegid -> seteuid -> one syscall -> seteuid(worker) ->
+ *    setegid(worker) -> return. It never allocates, sleeps or re-enters any
  *    event loop, so a LuaJIT coroutine cannot yield while the worker
  *    process holds switched credentials (the worker multiplexes many
  *    concurrent requests; a yield mid-switch would make other requests'
  *    file I/O run as the wrong user).
  *  - Only *effective* credentials (seteuid/setegid) are switched, and
- *    they are always restored: the worker's real uid/gid stay 0 for its
- *    whole lifetime, so there is no way to be "stuck" as a mapped user.
- *  - Callers must be real uid 0; otherwise every call fails with EPERM.
+ *    they are always restored: the worker's real uid/gid stay at their
+ *    startup values for its whole lifetime, so there is no way to be
+ *    "stuck" as a mapped user.
+ *  - The worker must have a clean identity (uid == euid, gid == egid) and
+ *    CAP_SETUID and CAP_SETGID in the effective set; root satisfies the
+ *    second condition trivially, a non-root worker gets them via file
+ *    capabilities (verified empirically: the effective cap set survives
+ *    seteuid() between non-zero uids while the caps remain in the
+ *    permitted set, so repeated switch/restore round-trips keep working).
+ *    Otherwise every call fails with EPERM.
  *  - All paths must be under the configured storage root, and a ".." path
  *    segment is rejected (defense in depth; the Lua layer also validates
  *    the URI before calling here).
@@ -40,6 +51,7 @@
 #include <stdio.h> /* rename(2) */
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -47,23 +59,66 @@
 #define PATH_MAX 4096
 #endif
 
-/* Switch effective credentials to (uid, gid). Caller must be real uid 0. */
+/* The worker's own identity, captured once on the first switch. nginx
+ * workers are single-threaded (one event loop per process) and each worker
+ * gets its own copy of this library, so the lazy statics need no locking.
+ */
+static int worker_uid = -1;
+static int worker_gid = -1;
+
+/* capability(7): the kernel's in-kernel representation (CAP_VERSION_3,
+ * two 32-bit words covering CAP_0..CAP_63). */
+#define CAP_VER3 0x20080522
+#define CAP_SETGID_BIT (1u << 6)
+#define CAP_SETUID_BIT (1u << 7)
+struct cap_hdr_t { int version; int pid; };
+struct cap_data_t { unsigned int effective, permitted, inheritable; };
+
+static int have_switch_caps(void) {
+    struct cap_hdr_t h = { CAP_VER3, 0 };
+    struct cap_data_t d[2] = {{0, 0, 0}, {0, 0, 0}};
+    if (syscall(SYS_capget, &h, d) != 0) {
+        return 0;
+    }
+    return (d[0].effective & CAP_SETGID_BIT) != 0 &&
+           (d[0].effective & CAP_SETUID_BIT) != 0;
+}
+
+/*
+ * Switch effective credentials to (uid, gid).
+ *
+ * Works for a root worker (all caps effective) and for a non-root worker
+ * that holds CAP_SETUID/CAP_SETGID in the effective set (file capabilities
+ * on the binary; verified on Linux 6.x). Ordering matters: setegid first,
+ * because once euid is switched the CAP_SETGID check no longer applies
+ * when restoring the gid. Restoring to the real uid/gid is unprivileged,
+ * so the restore cannot be blocked even if the effective cap set were
+ * somehow lost mid-sequence.
+ */
 static int as_user_switch(int uid, int gid) {
-    if (getuid() != 0) {
-        return -EPERM;
+    if (getuid() != geteuid() || getgid() != getegid()) {
+        return -EPERM; /* credentials already switched: cannot happen */
+    }
+    if (worker_uid < 0) {
+        if (!have_switch_caps()) {
+            return -EPERM;
+        }
+        worker_uid = getuid();
+        worker_gid = getgid();
     }
     if (setegid((gid_t)gid) != 0) {
         return -EPERM;
     }
     if (seteuid((uid_t)uid) != 0) {
+        setegid((gid_t)worker_gid);
         return -EPERM;
     }
     return 0;
 }
 
 static void as_user_restore(void) {
-    seteuid(0);
-    setegid(0);
+    seteuid((uid_t)worker_uid);
+    setegid((gid_t)worker_gid);
 }
 
 /*

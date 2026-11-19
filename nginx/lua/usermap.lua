@@ -14,7 +14,10 @@
 ---                                              -- JWT profile `name`)
 ---        "on_missing": "root",                -- "root" (default) or "deny":
 ---                                              -- what to do when the token
----                                              -- has no such claim
+---                                              -- has no such claim ("root"
+---                                              -- = serve as the worker's own
+---                                              -- identity, root in the
+---                                              -- current deployment)
 ---        "deny_uids": [0],                    -- mapped uids that are
 ---                                              -- rejected (root by default)
 ---        "uid_range": [1000, 60000],          -- optional allowed uid range
@@ -80,7 +83,7 @@ function usermap.resolve(claims)
         if on_missing == "deny" then
             return nil, "token has no '" .. claim .. "' claim", "forbidden"
         end
-        return nil -- legacy root behavior
+        return nil -- legacy: serve as the worker's own identity (root today)
     end
     value = tostring(value)
 

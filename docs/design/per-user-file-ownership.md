@@ -16,8 +16,11 @@ that:
 
 ## Codebase constraints (verified against the current image)
 
-- Workers run as root: real uid 0, so full credential manipulation is
-  possible and reversible (`seteuid`/`setegid` only; `setuid` is never used).
+- Workers run as root in the current deployment (real uid 0). The intended
+  future deployment is a non-root worker with `CAP_SETUID`/`CAP_SETGID` in
+  its effective set — the switch sequence works identically in both cases
+  (verified; see "Non-root workers with capabilities" below). Only
+  `seteuid`/`setegid` are used; `setuid` is never used.
 - The upload/TPC sink (`fileutil.sink_to_file`) alternates between
   **yielding** socket reads (`http.get_client_body_reader`) and file writes in
   the worker coroutine — the central scheduling constraint (below).
@@ -175,14 +178,56 @@ in the image that without `setgroups`, group membership stays `{gid 0 or
 primary}` — fine for the common HPC layout of user-owned or
 setgid-primary-group directories.
 
+## Non-root workers with capabilities (empirically verified)
+
+The intended future deployment runs the worker as a non-root user with the
+Linux capabilities that allow changing user/groups (`CAP_SETUID`,
+`CAP_SETGID`). Verified in the image (AlmaLinux 9, kernel 6.x):
+
+- **How the worker gets the capabilities**: file capabilities on the binary
+  — `setcap "cap_setuid+ep cap_setgid+ep" <nginx binary>` plus a non-root
+  container user. The other mechanisms do *not* work (verified): a plain
+  `execve` drops process capabilities (container `--cap-add` on the init
+  process does not reach a non-root nginx), and a root master that
+  `setuid()`s down to the worker uid loses them — `setuid(0→N)` **clears
+  the permitted set** (the inheritable set is not merged into permitted),
+  leaving the worker with zero capabilities.
+- **The switch sequence is unchanged**: `setegid(G)` → `seteuid(U)` → one
+  syscall → `seteuid(worker)` → `setegid(worker)` round-trips correctly
+  from a non-root worker with file caps — including repeated round-trips,
+  with correct file ownership. Verified end-to-end against the production
+  `as_user.c` (linked, `setcap`'d, run as uid 2000): mkdirp/open/write/
+  rename/unlink all OK, `stat` shows the mapped uid:gid, `..` traversal
+  still rejected, and the same binary run as a non-root user *without* the
+  caps fails every call with EPERM (the guard).
+- **Why restore cannot wedge**: restoring to the worker's real uid/gid is
+  unprivileged (target equals the real credential), so even a hypothetical
+  loss of the effective cap set mid-sequence cannot block the restore. The
+  kernel keeps the effective set as `effective ∩ permitted` across a
+  `seteuid` between non-zero uids (observed: the caps stay effective
+  across the entire round-trip).
+- **Ordering**: `setegid` must precede `seteuid` and the gid restore must
+  follow the uid restore — after `seteuid(U)`, further gid changes are
+  subject to the mapped user's own privileges (a non-root `setgid` fails
+  with EPERM — verified).
+- **Behavior change to note**: with the feature disabled (no
+  `user_mapping`), files are created as the *worker's own identity* — the
+  worker uid under a non-root deployment, not root. Likewise
+  `on_missing: "root"` means "serve as the worker's own identity" (root in
+  the current deployment).
+
 ## Threat model / edge cases
 
 - Mapping input is only ever a *verified* JWT; uid 0 is denied by default;
   uid range check blocks mapping into unexpected accounts; the fallback uid
   is subject to the same checks.
-- C module: `getuid() != 0` → EPERM on every call (fails closed if the
-  container is ever run non-root); path containment check inside the C code
-  (not just Lua); effective-only credentials, always restored.
+- C module: the worker must have a clean identity (uid == euid, gid ==
+  egid) and `CAP_SETUID`+`CAP_SETGID` in the effective set (root passes
+  trivially); otherwise every call fails with EPERM (fails closed —
+  verified: a non-root process without the caps gets EPERM from every
+  call); path containment check inside the C code (not just Lua);
+  effective-only credentials, always restored to the captured worker
+  identity.
 - `getpwnam` blocking via NSS: cached (10 min TTL); cold-cache cost is one
   NSS lookup per account — bounded and acceptable.
 - Parent directories must be writable by the mapped user — sites pre-create
