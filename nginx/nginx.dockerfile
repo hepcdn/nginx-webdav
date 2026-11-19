@@ -44,8 +44,6 @@ RUN /usr/local/openresty/luajit/bin/luarocks install lua-zlib
 FROM docker.io/almalinux:9
 
 RUN yum install -y pcre openssl zlib dnsmasq epel-release libuv \
-    && dnf config-manager --set-enabled crb \ 
-    && yum install -y libuv-devel \
     && yum clean all
 
 COPY --from=build /usr/local/openresty /usr/local/openresty
@@ -64,7 +62,7 @@ ENV LUA_PATH="/usr/local/openresty/site/lualib/?.ljbc;/usr/local/openresty/site/
 
 ENV LUA_CPATH="/usr/local/openresty/site/lualib/?.so;/usr/local/openresty/lualib/?.so;./?.so;/usr/local/lib/lua/5.1/?.so;/usr/local/openresty/luajit/lib/lua/5.1/?.so;/usr/local/lib/lua/5.1/loadall.so;/usr/local/openresty/luajit/lib/lua/5.1/?.so"
 
-RUN mkdir -p /var/run/openresty \
+RUN mkdir -p /var/run/openresty /var/run/openresty/client_body \
     && ln -sf /dev/stdout /usr/local/openresty/nginx/logs/access.log \
     && ln -sf /dev/stderr /usr/local/openresty/nginx/logs/error.log \
     && rm -f /usr/local/openresty/nginx/html/*
