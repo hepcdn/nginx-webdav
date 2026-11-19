@@ -167,3 +167,56 @@ def test_delete_directory_refused(
     )
 
 
+def test_redirect_missing_file_is_404(nginx_server: str, wlcg_read_header):
+    # A file that is neither local nor on any peer is a 404, not a 500
+    # (issue #89). Pre-fix, a server without a cluster token answered
+    # "No bearer token found" with 500
+    base = nginx_server.rsplit("/webdav", 1)[0]
+    response = httpx.get(
+        f"{base}/redirect/definitely_missing_file.txt",
+        headers=wlcg_read_header,
+        follow_redirects=False,
+    )
+    assert_status(response, httpx.codes.NOT_FOUND)
+
+
+def test_redirect_does_not_match_sibling_prefix(
+    nginx_server: str,
+    setup_server,
+    wlcg_read_header,
+):
+    # /redirectfoo must not be treated as /redirect + "foo" (issue #89):
+    # pre-fix it would stat a sibling of the storage root and redirect to it
+    _podman_exec(setup_server.container_id, "mkdir", "-p", "/var/www/webdavfoo")
+    _podman_exec(
+        setup_server.container_id,
+        "sh", "-c", "echo sneaky > /var/www/webdavfoo/sneaky.txt",
+    )
+    try:
+        base = nginx_server.rsplit("/webdav", 1)[0]
+        response = httpx.get(
+            f"{base}/redirectfoo/sneaky.txt",
+            headers=wlcg_read_header,
+            follow_redirects=False,
+        )
+        assert_status(response, httpx.codes.NOT_FOUND)
+
+        # A genuine redirect still works for a local file
+        _podman_exec(
+            setup_server.container_id,
+            "sh", "-c", "echo hi > /var/www/webdav/redirectme.txt",
+        )
+        response = httpx.get(
+            f"{base}/redirect/redirectme.txt",
+            headers=wlcg_read_header,
+            follow_redirects=False,
+        )
+        assert_status(response, httpx.codes.TEMPORARY_REDIRECT)
+        assert response.headers["location"] == "/webdav/redirectme.txt"
+    finally:
+        _podman_exec(setup_server.container_id, "rm", "-rf", "/var/www/webdavfoo")
+        _podman_exec(
+            setup_server.container_id, "rm", "-f", "/var/www/webdav/redirectme.txt"
+        )
+
+
