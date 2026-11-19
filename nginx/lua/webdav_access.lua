@@ -26,6 +26,14 @@ end
 -- Set the oidc_user, for use in access log
 ngx.var.oidc_user = res.sub
 
+-- Site admins: configured token sub IDs bypass the WLCG scope checks.
+-- The token itself must still be valid (verified above).
+for _, elevated_sub in ipairs(config.data.elevated_sub_ids or {}) do
+    if elevated_sub == res.sub then
+        return
+    end
+end
+
 -- From https://github.com/WLCG-AuthZ-WG/common-jwt-profile/blob/master/profile.md#capability-based-authorization-scope
 --
 -- Scope entries have the form "<capability>:<path>", for example

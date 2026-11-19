@@ -54,6 +54,11 @@ LwIDAQAB
         -- Public client ID for frontend OIDC authentication
         public_client_id = "",
 
+        -- Token sub IDs (the WLCG JWT "sub" claim) that bypass the WLCG
+        -- scope checks, e.g. site admins. JSON array of strings in
+        -- config.json. Tokens must still be valid (signed, unexpired).
+        elevated_sub_ids = {},
+
        -- To be able to confirm that the test server is the same one we spoke
        -- to, have the health check reply this ID. So the test sets the ID and
        -- the service replies with the same number

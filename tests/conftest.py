@@ -265,6 +265,19 @@ def wlcg_scoped_modify_header(oidc_mock_idp: MockIdP) -> dict[str, str]:
 
 
 @pytest.fixture(scope="session")
+def wlcg_elevated_header(oidc_mock_idp: MockIdP) -> dict[str, str]:
+    """A WLCG token for a sub ID configured in elevated_sub_ids.
+
+    The token carries no storage scopes at all: access should come from
+    the elevated-sub configuration, not from the scope checks.
+    """
+    bt = oidc_mock_idp.make_wlcg_token(
+        "openid offline_access", sub="elevated-admin", client_id="user123"
+    )
+    return {"Authorization": f"Bearer {bt}"}
+
+
+@pytest.fixture(scope="session")
 def build_container():
     # Make sure we are in the right place: one up from tests/
     assert os.getcwd() == os.path.dirname(os.path.dirname(__file__))
@@ -320,6 +333,9 @@ def setup_server(build_container: None, oidc_mock_idp: MockIdP):
         "openidc_client_id": "nginx1",
         "openidc_client_secret": "nginx1_secret",
         "public_client_id": "test_public_client_id",
+        # Tokens with this sub bypass WLCG scope checks (see
+        # wlcg_elevated_header). No other fixture uses this sub.
+        "elevated_sub_ids": ["elevated-admin"],
         "receive_buffer_size": 4096,
         # Give the container a (hopefully) unique ID that is returned in a
         # health check so that we can verify that the service we started is the
