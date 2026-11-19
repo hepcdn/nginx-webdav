@@ -27,9 +27,39 @@ end
 ngx.var.oidc_user = res.sub
 
 -- From https://github.com/WLCG-AuthZ-WG/common-jwt-profile/blob/master/profile.md#capability-based-authorization-scope
+--
+-- Scope entries have the form "<capability>:<path>", for example
+-- "storage.read:/user/alice/". A path of "/" grants the entire tree;
+-- any other path only grants that path and everything below it.
 
-local function has_scope(capability)
-    return string.find(res.scope or "", capability, 1, true) ~= nil
+local scopes = {}
+for entry in string.gmatch(res.scope or "", "%S+") do
+    local capability, prefix = entry:match("^(%S+):(/.*)$")
+    if capability then
+        scopes[capability] = scopes[capability] or {}
+        table.insert(scopes[capability], prefix)
+    end
+end
+
+local function path_under(path, prefix)
+    if prefix == "/" then
+        return true
+    end
+    if path:sub(1, #prefix) ~= prefix then
+        return false
+    end
+    -- Require a path boundary so that e.g. "storage.read:/data" does not
+    -- grant access to "/data2".
+    return path == prefix or prefix:sub(-1) == "/" or path:sub(#prefix + 1, #prefix + 1) == "/"
+end
+
+local function has_scope(capability, path)
+    for _, prefix in ipairs(scopes[capability] or {}) do
+        if path_under(path, prefix) then
+            return true
+        end
+    end
+    return false
 end
 
 local function deny(message)
@@ -38,11 +68,28 @@ local function deny(message)
     return ngx.exit(ngx.OK)
 end
 
+-- The resource path as addressed by the client (no service prefix, no query)
+local function resource_path()
+    local uri = ngx.var.request_uri
+    local q = uri:find("?")
+    if q then
+        uri = uri:sub(1, q - 1)
+    end
+    if uri:sub(1, #config.data.uriprefix) == config.data.uriprefix then
+        return uri:sub(#config.data.uriprefix + 1)
+    end
+    if uri:sub(1, 10) == "/redirect/" or uri == "/redirect" then
+        return uri:sub(10)
+    end
+    return uri
+end
+
 local method = ngx.var.request_method
+local path = resource_path()
 
 -- storage.read: Read data. Only applies to “online” resources such as disk (as opposed to “nearline” such as tape where the stage authorization should be used in addition).
 if method == "GET" or method == "HEAD" then
-    if not has_scope("storage.read:/") then
+    if not has_scope("storage.read", path) then
         return deny("no permission to read this resource")
     end
     -- storage.create: Upload data. This includes renaming files if the destination file does not already exist. This capability includes the creation of directories and subdirectories at the specified path, and the creation of any non-existent directories required to create the path itself. This authorization does not permit overwriting or deletion of stored data. The driving use case for a separate storage.create scope is to enable the stage-out of data from jobs on a worker node.
@@ -51,18 +98,18 @@ elseif method == "PUT" or method == "COPY" or method == "MKCOL" then
     local metadata = fileutil.get_metadata(file_path, false)
     if method == "PUT" and metadata.exists and not metadata.is_directory then
         -- Overwriting an existing file is a modification, not a creation.
-        if not has_scope("storage.modify:/") then
+        if not has_scope("storage.modify", path) then
             return deny("no permission to modify this resource")
         end
     else
         -- storage.modify is a strict superset of storage.create
-        if not (has_scope("storage.create:/") or has_scope("storage.modify:/")) then
+        if not (has_scope("storage.create", path) or has_scope("storage.modify", path)) then
             return deny("no permission to create this resource")
         end
     end
 -- storage.modify: Change data. This includes renaming files, creating new files, and writing data. This permission includes overwriting or replacing stored data in addition to deleting or truncating data. This is a strict superset of storage.create.
 elseif method == "DELETE" or method == "MOVE" then
-    if not has_scope("storage.modify:/") then
+    if not has_scope("storage.modify", path) then
         return deny("no permission to modify this resource")
     end
 end
