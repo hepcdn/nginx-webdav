@@ -220,3 +220,42 @@ def test_redirect_does_not_match_sibling_prefix(
         )
 
 
+def test_image_has_no_libuv_devel(build_container: None):
+    # The runtime image does not need libuv headers (issue #100)
+    result = subprocess.run(
+        ["podman", "run", "--rm", "nginx-webdav", "rpm", "-q", "libuv-devel"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0, (
+        f"libuv-devel should not be installed: {result.stdout}"
+    )
+    # The libuv runtime library is still available
+    result = subprocess.run(
+        ["podman", "run", "--rm", "nginx-webdav", "rpm", "-q", "libuv"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"libuv should still be installed: {result.stderr}"
+
+
+def test_upload_temp_dir_not_listed(
+    nginx_server: str,
+    setup_server,
+    wlcg_read_header,
+):
+    # The client body temp dir must not be inside the served tree (issue
+    # #100), so it does not show up in autoindex listings
+    conf = _podman_exec(
+        setup_server.container_id, "cat", "/etc/nginx/conf.d/include/locations.conf"
+    )
+    line = next(
+        l for l in conf.splitlines() if "client_body_temp_path" in l
+    ).strip()
+    assert "/var/www/webdav" not in line, (
+        f"client body temp path is inside the served tree: {line}"
+    )
+
+    response = httpx.get(f"{nginx_server}/", headers=wlcg_read_header)
+    assert_status(response, httpx.codes.OK)
+    assert ".upload" not in response.text
