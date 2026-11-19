@@ -1,5 +1,5 @@
---- bundle/nginx-1.31.1/src/event/ngx_event_openssl.c.orig
-+++ bundle/nginx-1.31.1/src/event/ngx_event_openssl.c
+--- bundle/nginx-1.31.8/src/event/ngx_event_openssl.c.orig
++++ bundle/nginx-1.31.8/src/event/ngx_event_openssl.c
 @@ -959,6 +959,12 @@
      SSL_CTX_set_verify(ssl->ctx, SSL_VERIFY_PEER, ngx_ssl_verify_callback);
  
