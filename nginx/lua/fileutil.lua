@@ -139,14 +139,14 @@ function fileutil.sink_to_file(file_path, reader, perfmarkers)
         end
         local now = ngx.now()
         if buffer then
-            file, err = file:write(buffer)
+            local ok, werr = file:write(buffer)
+            if not ok then
+                err = "failed to write to the file: " .. (werr or "unknown error")
+                goto cleanup
+            end
             bytes_written = bytes_written + #buffer
             last_transferred = now
             cksumutil.adler32_increment(adler_state, buffer)
-            if not file then
-                err = "failed to write to the file: " .. err
-                goto cleanup
-            end
         end
         if perfmarkers and last_perfmarker + config.data.performance_marker_timeout <= now then
             write_perfmarker(bytes_written, start_time, last_transferred, now)
