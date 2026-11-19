@@ -24,6 +24,31 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 logger = logging.getLogger()
 
 
+def _remove_container(container_id: str) -> None:
+    """Stop and remove a test container, best effort.
+
+    Teardown runs after the tests have finished, so a failure here should not
+    fail the run. Rootless podman on GitHub runners can exit non-zero while
+    tearing down the container's network namespace ("rootless netns: kill
+    network process: permission denied") even though the container itself
+    has stopped.
+    """
+    for cmd in (
+        ["podman", "stop", container_id],
+        ["podman", "rm", "--force", container_id],
+    ):
+        result = subprocess.run(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "%s exited with %d: %s",
+                " ".join(cmd),
+                result.returncode,
+                result.stderr.strip(),
+            )
+
+
 @dataclass
 class MockIdP:
     public_key_pem: str
@@ -343,10 +368,7 @@ def setup_server(build_container: None, oidc_mock_idp: MockIdP):
         )
     finally:
         # Stop podman container and clean up
-        subprocess.check_call(
-            ["podman", "stop", container_id], stdout=subprocess.DEVNULL
-        )
-        subprocess.check_call(["podman", "rm", container_id], stdout=subprocess.DEVNULL)
+        _remove_container(container_id)
         # Clean up
         os.remove("nginx/lua/config.json")
 
@@ -423,10 +445,7 @@ def setup_cluster(build_container: None, oidc_mock_idp: MockIdP):
         subprocess.check_call(["podman", "logs", container_id])
 
         # Stop podman container and clean up
-        subprocess.check_call(
-            ["podman", "stop", container_id], stdout=subprocess.DEVNULL
-        )
-        subprocess.check_call(["podman", "rm", container_id], stdout=subprocess.DEVNULL)
+        _remove_container(container_id)
         os.remove(f"nginx/lua/config{i}.json")
 
     subprocess.check_call(
