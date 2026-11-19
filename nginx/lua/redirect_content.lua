@@ -7,6 +7,12 @@ local gossip = require("gossip")
 
 -- TODO: always "redirect"?
 local path = ngx.var.request_uri:sub(#"/redirect" + 1)
+if path ~= "" and path:sub(1, 1) ~= "/" then
+    -- /redirectfoo is not under /redirect/; strip-by-length alone would
+    -- treat it as a sibling of the storage root
+    ngx.status = ngx.HTTP_NOT_FOUND
+    ngx.exit(ngx.OK)
+end
 local webdav_uri = config.data.uriprefix .. path
 local stat = fileutil.get_metadata(config.data.local_path .. path, false)
 if stat.exists then
@@ -52,8 +58,10 @@ local tic = ngx.now()
 -- TODO: we could use the token that the client gives us, is that better?
 local token = ngx.shared.gossip_data:get("bearer_token")
 if not token then
-    ngx.log(ngx.ERR, "No bearer token found in shared dict")
-    ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
+    -- No cluster configured (or no token fetched yet), so there are no
+    -- peers to ask: answer 404 instead of 500
+    ngx.log(ngx.WARN, "No bearer token found in shared dict, no peers to query")
+    ngx.status = ngx.HTTP_NOT_FOUND
     ngx.exit(ngx.OK)
 end
 local peers, _ = gossip.peers()
