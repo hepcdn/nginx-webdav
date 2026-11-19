@@ -1,6 +1,7 @@
 -- voms_auth.lua
 -- X.509/VOMS certificate authentication for HEPCDN
 -- Validates client certificates with VOMS extensions and maps FQANs to scopes.
+-- Uses openssl subprocess for certificate parsing (reliable, no FFI dependency issues).
 
 local ngx = require("ngx")
 
@@ -93,8 +94,6 @@ function voms_auth.extract_fqans(cert_file)
     end
 
     -- Parse FQANs from output
-    -- Lines after the OID line contain the FQANs
-    -- Format: "    ../fqan" (with leading dots from ASN.1 encoding)
     local fqans = {}
     local found_oid = false
     for line in output:gmatch("[^\r\n]+") do
@@ -103,17 +102,13 @@ function voms_auth.extract_fqans(cert_file)
         elseif found_oid and line:match("^%s+%.") then
             -- FQAN line (starts with whitespace and a dot)
             local fqan = line:gsub("^%s+", "")
-            -- Handle ../ prefix (ASN.1 encoding artifact)
             fqan = fqan:gsub("^%.%./", "/")
-            -- Handle ./ prefix
             fqan = fqan:gsub("^%./", "/")
-            -- Stop at next extension or end of block
             if not fqan:find("/[a-z]") then
                 break
             end
             table.insert(fqans, fqan)
         elseif found_oid and not line:match("^%s+") then
-            -- Reached next non-indented line, stop
             break
         end
     end
@@ -126,22 +121,11 @@ function voms_auth.extract_fqans(cert_file)
 end
 
 function voms_auth.fqans_to_scopes(fqans)
-    -- Map grid FQANs to HEPCDN scopes
-    -- Based on WLCG common JWT profile
     local scopes = ""
     for _, fqan in ipairs(fqans) do
         if fqan:find("^/cms") then
-            -- Base CMS access
             scopes = scopes .. " storage.read:/ storage.create:/ storage.modify:/ hepcdn.view hepcdn.access"
-            
-            -- Role-based additional scopes
-            if fqan:find("Role=prod") then
-                -- Production role gets all scopes
-            elseif fqan:find("Role=analysis") then
-                -- Analysis role gets read and write
-            end
-            
-            break -- One matching FQAN is sufficient
+            break
         end
     end
     return scopes
