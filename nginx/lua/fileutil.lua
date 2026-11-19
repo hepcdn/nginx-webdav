@@ -1,6 +1,7 @@
 local sys_stat = require("posix.sys.stat")
 local config = require("config")
 local cksumutil = require("cksumutil")
+local asuser = require("asuser")
 
 local fileutil = {}
 
@@ -108,21 +109,48 @@ end
 ---@param file_path string
 ---@param reader fun(max_chunk_size:integer): string?, string
 ---@param perfmarkers boolean?
----@return string? err, string? adler32
+---@param owner {uid:integer, gid:integer}?
+---@return string? err, string? adler32, string? errclass
 ---
 ---Reads from the reader function and writes to the file_path.
 ---Returns nil if successful, otherwise an error message
 ---Also returns the adler32 checksum of the written data
 ---Set perfmarkers to send text/perf-marker-stream messages to the client.
 ---  (if set, this function will call ngx.say to send messages and flush them)
-function fileutil.sink_to_file(file_path, reader, perfmarkers)
+---If owner ({uid, gid}) is provided, the file is opened and its parent
+---directories created with that user's effective credentials, so the file
+---is owned by the mapped user; the (root) worker then streams data over the
+---opened fd, since POSIX permissions are checked at open() time.
+---On failure the third return value classifies the error: "forbidden"
+---(the mapped user lacks permission), "not_found", or "error".
+function fileutil.sink_to_file(file_path, reader, perfmarkers, owner)
+    local err, errclass
     local directory = file_path:match("(.*)/")
     if directory then
-        fileutil.mkdir(directory, true)
+        if owner then
+            err, errclass = asuser.mkdirp(owner, directory)
+        else
+            local suc, mkdir_err = fileutil.mkdir(directory, true)
+            if not suc then
+                err, errclass = mkdir_err, "error"
+            end
+        end
+        if err then
+            return err, nil, errclass
+        end
     end
-    local file, err = io.open(file_path, "w+b")
-    if not file then
-        return "failed to open file: " .. err
+
+    local file, fd
+    if owner then
+        fd, err, errclass = asuser.open_for_write(owner, file_path)
+        if not fd then
+            return err, nil, errclass
+        end
+    else
+        file, err = io.open(file_path, "w+b")
+        if not file then
+            return "failed to open file: " .. err, nil, "error"
+        end
     end
 
     local buffer = nil
@@ -139,14 +167,25 @@ function fileutil.sink_to_file(file_path, reader, perfmarkers)
         end
         local now = ngx.now()
         if buffer then
-            file, err = file:write(buffer)
-            bytes_written = bytes_written + #buffer
+            if owner then
+                local n, werr = asuser.write_fd(fd, buffer)
+                if not n then
+                    err = "failed to write to the file: " .. werr
+                    goto cleanup
+                end
+                bytes_written = bytes_written + n
+            else
+                -- LuaJIT is Lua 5.1: file:write returns the file handle on
+                -- success (not the number of chars, as in Lua 5.2+)
+                local wfile, werr = file:write(buffer)
+                if not wfile then
+                    err = "failed to write to the file: " .. werr
+                    goto cleanup
+                end
+                bytes_written = bytes_written + #buffer
+            end
             last_transferred = now
             cksumutil.adler32_increment(adler_state, buffer)
-            if not file then
-                err = "failed to write to the file: " .. err
-                goto cleanup
-            end
         end
         if perfmarkers and last_perfmarker + config.data.performance_marker_timeout <= now then
             write_perfmarker(bytes_written, start_time, last_transferred, now)
@@ -155,20 +194,29 @@ function fileutil.sink_to_file(file_path, reader, perfmarkers)
     until not buffer
     ::cleanup::
 
-    local suc, exitcode = file:close()
-    if not suc then
-        -- This is more of an internal error
-        ngx.log(ngx.ERR, "failed to close " .. file_path .. ": " .. exitcode)
-        err = err or ("failed to close file: " .. exitcode)
+    if owner then
+        local _, cerr = asuser.close_fd(fd)
+        if cerr then
+            -- This is more of an internal error
+            ngx.log(ngx.ERR, "failed to close " .. file_path .. ": " .. cerr)
+            err = err or ("failed to close file: " .. cerr)
+        end
+    else
+        local suc, exitcode = file:close()
+        if not suc then
+            -- This is more of an internal error
+            ngx.log(ngx.ERR, "failed to close " .. file_path .. ": " .. exitcode)
+            err = err or ("failed to close file: " .. exitcode)
+        end
     end
 
     if err then
         local rmerr
-        suc, rmerr = os.remove(file_path)
+        local suc = os.remove(file_path)
         if not suc then
             ngx.log(ngx.ERR, "failed to cleanup " .. file_path .. ": " .. rmerr)
         end
-        return err
+        return err, nil, errclass
     end
 
     local adler32 = cksumutil.adler32_to_string(adler_state)

@@ -41,6 +41,11 @@ RUN /usr/local/openresty/luajit/bin/luarocks install lua-resty-openidc
 
 RUN /usr/local/openresty/luajit/bin/luarocks install lua-zlib
 
+# Small C helper that runs filesystem operations with a mapped user's
+# effective credentials (see as_user.c)
+COPY as_user.c .
+RUN gcc -O2 -Wall -Wextra -shared -fPIC -o as_user.so as_user.c
+
 FROM docker.io/almalinux:9
 
 RUN yum install -y pcre openssl zlib dnsmasq epel-release libuv \
@@ -49,6 +54,7 @@ RUN yum install -y pcre openssl zlib dnsmasq epel-release libuv \
     && yum clean all
 
 COPY --from=build /usr/local/openresty /usr/local/openresty
+COPY --from=build /usr/local/src/as_user.so /usr/local/openresty/site/lualib/as_user.so
 
 ARG VERSION="0.0.1"
 ENV VERSION=${VERSION}

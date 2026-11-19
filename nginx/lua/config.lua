@@ -27,6 +27,11 @@ local Config = {
         -- How often to send a performance marker (in seconds)
         performance_marker_timeout = 5,
 
+        -- Optional: map the verified token to a local unix account so file
+        -- I/O runs as that user (see nginx/lua/usermap.lua).
+        -- Absent or empty = disabled: all file I/O runs as root (legacy).
+        user_mapping = {},
+
         -- This is used in webdav_tpc_content
         -- Timeouts are in milliseconds
         tpc_connect_timeout = 10000,
