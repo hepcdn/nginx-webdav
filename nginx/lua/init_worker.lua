@@ -3,7 +3,7 @@ local resty_http = require("resty.http")
 local jwt = require("resty.jwt")
 local cjson = require("cjson")
 local gossip = require("gossip")
-local cert_auth = require("cert_auth")
+local gossip_auth = require("gossip_auth")
 
 -- if file does not exist, we take the default values
 config.load("/etc/nginx/lua/config.json")
@@ -12,6 +12,9 @@ config.load("/etc/nginx/lua/config.json")
 if ngx.worker.id() ~= 0 then
     return
 end
+
+-- Initialize gossip authentication based on IAM capabilities
+gossip_auth.init()
 
 if config.data.openidc_client_id == "" or config.data.openidc_client_secret == "" then
     ngx.log(ngx.ERR, "Missing openidc_client_id or openidc_client_secret from config.json, will not start cluster gossip")
@@ -27,26 +30,35 @@ local function peer_exchange_gossip(peer, message)
     local httpc = resty_http.new()
     -- timeouts (connect, send, read) are in milliseconds
     httpc:set_timeouts(config.data.gossip_timeout, config.data.gossip_timeout, config.data.gossip_timeout)
-    ngx.log(ngx.INFO, "Sending gossip message to ", peer)
+    ngx.log(ngx.INFO, "Sending gossip message to ", peer, " (mode: ", gossip_auth.get_mode(), ")")
     
-    -- Sign the gossip message with our certificate
-    local signature = cert_auth.sign(message)
-    if not signature then
-        gossip.handle_peer_error(peer, "Failed to sign gossip message")
-        return
+    -- In RFC 8705 mode, sign the gossip message with our certificate
+    local signature = gossip_auth.sign_message(message)
+    
+    local headers = {
+        ["Content-Type"] = "application/json",
+        ["Content-Length"] = #message,
+        ["Accept"] = "application/json",
+        ["User-Agent"] = "nginx-webdav/" .. config.data.server_version,
+    }
+    
+    if signature then
+        headers["X-Gossip-Signature"] = signature
+        headers["X-Gossip-Cert-Fingerprint"] = gossip_auth.get_fingerprint()
+    else
+        -- Fallback mode: use JWT token in Authorization header
+        local token = ngx.shared.gossip_data:get("bearer_token")
+        if not token then
+            gossip.handle_peer_error(peer, "No bearer token available")
+            return
+        end
+        headers["Authorization"] = "Bearer " .. token
     end
     
     local res, err = httpc:request_uri(peer .. "gossip", {
         method = "POST",
         body = message,
-        headers = {
-            ["Content-Type"] = "application/json",
-            ["Content-Length"] = #message,
-            ["X-Gossip-Signature"] = signature,
-            ["X-Gossip-Cert-Fingerprint"] = cert_auth.get_fingerprint(),
-            ["Accept"] = "application/json",
-            ["User-Agent"] = "nginx-webdav/" .. config.data.server_version,
-        },
+        headers = headers,
     })
     if not res then
         local errmsg = "Failed to send gossip message to " .. peer .. ": " .. err
@@ -81,7 +93,7 @@ local function worker_gossip(premature)
 
     local tic = ngx.now()
 
-    -- Update our bearer token
+    -- Update our bearer token (needed for both modes)
     local token = ngx.shared.gossip_data:get("bearer_token")
     if type(token) ~= "string" then
         token = nil
