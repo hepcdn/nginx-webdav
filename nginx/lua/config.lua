@@ -81,4 +81,9 @@ LwIDAQAB
     end
  end
 
- return Config
+-- Self-load so that a fresh module instance (e.g. when lua_code_cache is
+-- off in DEBUG mode and modules are re-required on every request) starts
+-- with the real values instead of the defaults
+Config.load("/etc/nginx/lua/config.json")
+
+return Config
