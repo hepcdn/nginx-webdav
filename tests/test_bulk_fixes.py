@@ -102,3 +102,33 @@ print("XATTR_OK")
     assert "XATTR_OK" in out
 
 
+def test_debug_mode_no_stray_server(setup_server):
+    # The test server runs with DEBUG=true (issue #86): the generated
+    # site.conf must contain exactly one server block, and there must be no
+    # listener on port 80 inside the container
+    conf = _podman_exec(
+        setup_server.container_id, "cat", "/etc/nginx/conf.d/site.conf"
+    )
+    assert conf.count("server {") == 1, conf
+    assert "lua_code_cache off;" in conf
+
+    # With lua_code_cache off, modules are re-required on every request, so
+    # the config must self-load on require; the health endpoint proves the
+    # loaded values are in use (-1 is the pre-config default)
+    base = setup_server.hosturl.rsplit("/webdav", 1)[0]
+    response = httpx.get(f"{base}/webdav_health")
+    assert_status(response, httpx.codes.OK)
+    assert "OK -1" not in response.text
+
+    tcp = _podman_exec(
+        setup_server.container_id, "cat", "/proc/net/tcp", "/proc/net/tcp6"
+    )
+    listening = set()
+    for line in tcp.splitlines():
+        parts = line.split()
+        # /proc/net/tcp rows: sl local_address rem_address st ...
+        if len(parts) >= 4 and parts[3] == "0A":  # 0A = LISTEN
+            listening.add(int(parts[1].rsplit(":", 1)[1], 16))
+    assert 80 not in listening, f"unexpected listener on port 80: {sorted(listening)}"
+
+

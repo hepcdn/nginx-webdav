@@ -45,12 +45,13 @@ EOF
 fi
 
 if [ "$DEBUG" == "true" ]; then
+  # site.conf is included from the http block, so http-level directives go
+  # directly in it. A bare "server" block would default to listening on
+  # port 80 (or 8000 as non-root) and never apply lua_code_cache to the
+  # real server.
   cat <<EOF >> /etc/nginx/conf.d/site.conf
 error_log stderr info;
-
-server {
-    lua_code_cache off;
-}
+lua_code_cache off;
 EOF
   echo "Debug mode enabled"
 else
