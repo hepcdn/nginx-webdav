@@ -81,6 +81,39 @@ This design uses (2): a ~150-line auditable C file with four exported
 functions, no state, no threads, no libc facilities beyond `open`/`mkdir`/
 `unlink`/`rename`/`seteuid`/`setegid`.
 
+### Why not pure FFI (no compiled module)?
+
+Mechanically, pure FFI works: `ffi.C.setegid`/`ffi.C.seteuid`/`ffi.C.open`
+are the same libc calls the C module makes, and a Lua-level sequence
+(verified in the image) produces correctly owned files. The C module is
+not about *being able to call C* — FFI does that — it is about which side
+of the language boundary the switch window lives on:
+
+- In the C module the whole sequence is **one C frame**: a LuaJIT
+  coroutine cannot yield inside a C frame, so the window is atomic with
+  respect to every other request *by construction*.
+- In a Lua FFI sequence the window is five separate `ffi.C` calls with
+  instruction boundaries between them. Verified in this build (OpenResty
+  1.31.8.1): the scheduler does **not** preempt — a 3 s no-yield FFI loop
+  pinned the worker and a concurrent request only ran after the loop
+  finished (the looping coroutine observed none of its side effects). So
+  a carefully written FFI sequence is safe *today*.
+- But that is luck, not an invariant. Anything placed between the switch
+  and the restore — a yielding `ngx.*`/`lua-resty` call, a `pcall`
+  boundary, or any Lua error (string handling, an FFI misuse) unwinding
+  past the restore line — leaks the switched identity for the rest of the
+  worker's lifetime. In the C module the restore is inside the same C
+  frame, unreachable from Lua errors, so state can never leak. Likewise,
+  if a future OpenResty gains signal-based preemption of running Lua
+  code, the FFI window silently becomes unsafe; the C window is immune.
+- The fail-closed identity/capability guard, the path-containment check
+  and the negated-errno convention also live in one machine-checkable
+  place instead of being re-derived and code-reviewed in Lua.
+
+The C module's cost is one `gcc -shared` line in a build that already
+compiles OpenResty, zlib and luaposix — it adds no new class of artifact
+to the image.
+
 ## Implementation
 
 ### 1. Identity mapping — `nginx/lua/usermap.lua` (new)
