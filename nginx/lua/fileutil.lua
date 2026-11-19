@@ -120,7 +120,7 @@ function fileutil.sink_to_file(file_path, reader, perfmarkers)
     if directory then
         fileutil.mkdir(directory, true)
     end
-    local file, err = io.open(file_path, "w+b")
+    local file, err = ngx.open_file_file(file_path, "w")
     if not file then
         return "failed to open file: " .. err
     end
@@ -139,14 +139,14 @@ function fileutil.sink_to_file(file_path, reader, perfmarkers)
         end
         local now = ngx.now()
         if buffer then
-            file, err = file:write(buffer)
+            local ok, write_err = file:write(buffer)
+            if not ok then
+                err = "failed to write to the file: " .. write_err
+                goto cleanup
+            end
             bytes_written = bytes_written + #buffer
             last_transferred = now
             cksumutil.adler32_increment(adler_state, buffer)
-            if not file then
-                err = "failed to write to the file: " .. err
-                goto cleanup
-            end
         end
         if perfmarkers and last_perfmarker + config.data.performance_marker_timeout <= now then
             write_perfmarker(bytes_written, start_time, last_transferred, now)
@@ -155,11 +155,10 @@ function fileutil.sink_to_file(file_path, reader, perfmarkers)
     until not buffer
     ::cleanup::
 
-    local suc, exitcode = file:close()
-    if not suc then
-        -- This is more of an internal error
-        ngx.log(ngx.ERR, "failed to close " .. file_path .. ": " .. exitcode)
-        err = err or ("failed to close file: " .. exitcode)
+    local close_err = file:close()
+    if close_err then
+        ngx.log(ngx.ERR, "failed to close " .. file_path .. ": " .. close_err)
+        err = err or ("failed to close file: " .. close_err)
     end
 
     if err then
