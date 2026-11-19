@@ -67,3 +67,38 @@ def test_put_disk_full_is_clean_error(
         _podman_exec(setup_server.container_id, "rm", "-f", target)
 
 
+def test_cksumutil_xattr_helpers(setup_server):
+    # Unit-check the xattr helpers directly in the test container (issue
+    # #85). Pre-fix code reports a missing xattr as an error, never reports
+    # setxattr failures, and never reads the second xattr location.
+    script = r"""
+package.path = "/etc/nginx/lua/?.lua;" .. package.path
+package.loaded["config"] = {data = {}}
+local c = require("cksumutil")
+local path = "/tmp/.xattr_unit_test.txt"
+local f = assert(io.open(path, "w"))
+f:write("hello xattr")
+f:close()
+local ok, err = pcall(function()
+    -- a missing xattr is not an error
+    local e1, v1 = c.getxattr(path, "user.nginx-webdav.adler32")
+    assert(e1 == nil and v1 == nil,
+        "missing xattr reported as error: " .. tostring(e1))
+    -- a setxattr failure must be reported
+    local e2 = c.setxattr("/nonexistent/.xattr_unit_target", "user.x", "y")
+    assert(type(e2) == "string" and e2:find("Error"),
+        "setxattr failure not reported: " .. tostring(e2))
+    -- check_adler32 must find a value stored only in the second location
+    assert(c.setxattr(path, "user.nginx-webdav.adler32", "cafebabe") == nil)
+    local e3, v3 = c.check_adler32(path)
+    assert(e3 == nil and v3 == "cafebabe",
+        "second xattr location not checked: " .. tostring(e3) .. " " .. tostring(v3))
+end)
+os.remove(path)
+assert(ok, "xattr helper unit test failed: " .. tostring(err))
+print("XATTR_OK")
+"""
+    out = _podman_exec(setup_server.container_id, "luajit", "-e", script)
+    assert "XATTR_OK" in out
+
+

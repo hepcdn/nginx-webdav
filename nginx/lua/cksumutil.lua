@@ -124,11 +124,13 @@ function cksumutil.check_adler32(path)
   local adler32 = nil
   for i=1,#adler_xattr_locations do
     local err, val = cksumutil.getxattr(path, adler_xattr_locations[i])
-    if not err then
-      return nil, val
-    elseif err then
+    if err then
       return err, nil
     end
+    if val then
+      return nil, val
+    end
+    -- No error but no value either: this xattr is not set, try the next one
   end
   return nil, nil
 end
@@ -153,7 +155,7 @@ int getxattr(const char *path, const char *name, char *value, size_t size);
 ---Sets an extended attribute on a file
 function cksumutil.setxattr(path, key, value)
   local ret = ffi.C.setxattr(path, key, value, string.len(value), 0)
-  if ret > 0 then
+  if ret < 0 then
     ret = ffi.errno()
     return "Error " .. ret .. " in setxattr"
   else
@@ -173,8 +175,8 @@ function cksumutil.getxattr(path, key)
   -- FIXME: get the C errstr
   if ret < 0 then
     ret = ffi.errno()
-    -- the value doesn' exist
-    local ENODATA = 63
+    -- the value doesn't exist (ENODATA on Linux)
+    local ENODATA = 61
     if ffi.errno() == ENODATA then
       -- It's not really an error if the attribute isn't there. I think nil
       -- is disctinct from "" in Lua
