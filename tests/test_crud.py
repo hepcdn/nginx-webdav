@@ -24,31 +24,70 @@ def test_crud_file(
     assert_status(response, httpx.codes.OK)
     assert response.text == data
 
+    # Overwriting an existing file requires the modify scope
     response = httpx.put(path, headers=wlcg_create_header, content=data + "plus more")
-    # TODO: this should be FORBIDDEN, but allowed for wlcg_modify_header
+    assert_status(response, httpx.codes.FORBIDDEN)
+    assert "no permission to modify" in response.text
+
+    response = httpx.put(path, headers=wlcg_modify_header, content=data + "plus more")
     assert_status(response, httpx.codes.NO_CONTENT)
 
     response = httpx.get(path, headers=wlcg_create_header)
     assert_status(response, httpx.codes.OK)
     assert response.text == data + "plus more"
 
-    # TODO: once the above is fixed, this should be uncommented
-    # response = httpx.put(path, headers=wlcg_create_header, data=data + "with some extra data")
-    # assert_status(response, httpx.codes.CREATED)
-
+    # Deleting requires the modify scope
     response = httpx.delete(path, headers=wlcg_create_header)
-    # TODO: this should be FORBIDDEN, but allowed for wlcg_modify_header
-    assert_status(response, httpx.codes.NO_CONTENT)
+    assert_status(response, httpx.codes.FORBIDDEN)
+    assert "no permission to modify" in response.text
 
-    # TODO: once the above is fixed, this should be uncommented
-    # response = httpx.delete(path, headers=wlcg_modify_header)
-    # assert_status(response, httpx.codes.NO_CONTENT)
+    response = httpx.delete(path, headers=wlcg_modify_header)
+    assert_status(response, httpx.codes.NO_CONTENT)
 
     response = httpx.get(path, headers=wlcg_create_header)
     assert_status(response, httpx.codes.NOT_FOUND)
 
     response = httpx.delete(path, headers=wlcg_modify_header)
     assert_status(response, httpx.codes.NOT_FOUND)
+
+
+def test_readonly_scope_cannot_write(
+    nginx_server: str,
+    wlcg_read_header: dict[str, str],
+    wlcg_create_header: dict[str, str],
+):
+    """A token with only storage.read:/ must not be able to create or modify."""
+    path = f"{nginx_server}/test_readonly.txt"
+    data = "Hello, world!" * 100
+
+    # Cannot create
+    response = httpx.put(path, headers=wlcg_read_header, content=data)
+    assert_status(response, httpx.codes.FORBIDDEN)
+    assert "no permission to create" in response.text
+
+    # Create with a create-scope token, then try modify ops with the read-only token
+    response = httpx.put(path, headers=wlcg_create_header, content=data)
+    assert_status(response, httpx.codes.CREATED)
+
+    # Can still read
+    response = httpx.get(path, headers=wlcg_read_header)
+    assert_status(response, httpx.codes.OK)
+    assert response.text == data
+
+    # Cannot overwrite
+    response = httpx.put(path, headers=wlcg_read_header, content=data + "more")
+    assert_status(response, httpx.codes.FORBIDDEN)
+    assert "no permission to modify" in response.text
+
+    # Cannot delete
+    response = httpx.delete(path, headers=wlcg_read_header)
+    assert_status(response, httpx.codes.FORBIDDEN)
+    assert "no permission to modify" in response.text
+
+    # File is still there
+    response = httpx.get(path, headers=wlcg_read_header)
+    assert_status(response, httpx.codes.OK)
+    assert response.text == data
 
 
 def test_crud_dir(
