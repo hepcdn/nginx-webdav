@@ -240,6 +240,31 @@ def wlcg_modify_header(oidc_mock_idp: MockIdP) -> dict[str, str]:
 
 
 @pytest.fixture(scope="session")
+def wlcg_scoped_read_header(oidc_mock_idp: MockIdP) -> dict[str, str]:
+    """A WLCG token with read access to /scoped/ only"""
+    bt = oidc_mock_idp.make_wlcg_token("openid offline_access storage.read:/scoped/")
+    return {"Authorization": f"Bearer {bt}"}
+
+
+@pytest.fixture(scope="session")
+def wlcg_scoped_create_header(oidc_mock_idp: MockIdP) -> dict[str, str]:
+    """A WLCG token with create (and read) access to /scoped/ only"""
+    bt = oidc_mock_idp.make_wlcg_token(
+        "openid offline_access storage.read:/scoped/ storage.create:/scoped/"
+    )
+    return {"Authorization": f"Bearer {bt}"}
+
+
+@pytest.fixture(scope="session")
+def wlcg_scoped_modify_header(oidc_mock_idp: MockIdP) -> dict[str, str]:
+    """A WLCG token with modify (and read) access to /scoped/ only"""
+    bt = oidc_mock_idp.make_wlcg_token(
+        "openid offline_access storage.read:/scoped/ storage.modify:/scoped/"
+    )
+    return {"Authorization": f"Bearer {bt}"}
+
+
+@pytest.fixture(scope="session")
 def build_container():
     # Make sure we are in the right place: one up from tests/
     assert os.getcwd() == os.path.dirname(os.path.dirname(__file__))
