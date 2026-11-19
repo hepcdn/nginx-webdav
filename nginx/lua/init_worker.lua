@@ -7,6 +7,25 @@ local gossip = require("gossip")
 -- if file does not exist, we take the default values
 config.load("/etc/nginx/lua/config.json")
 
+-- libuv event-loop bridge: pump luv's loop from nginx's event loop on
+-- every worker (see nginx/uvbridge.c). Must run in the worker's main
+-- state, so before any request/timer context is involved. Diagnostic
+-- handles (timer + tcp echo server) are created in the same state: luv
+-- makes one loop per lua_State and ngx.timer callbacks do NOT share this
+-- state (handles created there would die with the callback).
+if config.data.uvbridge_enabled then
+    local uvbridge = require("uvbridge")
+    local ok, err = uvbridge.attach(config.data.uvbridge_tick)
+    if not ok then
+        ngx.log(ngx.ERR, "uvbridge: failed to attach: ", err)
+    else
+        local ok2, err2 = uvbridge.setup_handles()
+        if not ok2 then
+            ngx.log(ngx.ERR, "uvbridge: failed to set up handles: ", err2)
+        end
+    end
+end
+
 -- Only one worker thread needs to manage the gossip timer
 if ngx.worker.id() ~= 0 then
     return
