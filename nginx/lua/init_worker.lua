@@ -3,6 +3,7 @@ local resty_http = require("resty.http")
 local jwt = require("resty.jwt")
 local cjson = require("cjson")
 local gossip = require("gossip")
+local cert_auth = require("cert_auth")
 
 -- if file does not exist, we take the default values
 config.load("/etc/nginx/lua/config.json")
@@ -22,19 +23,27 @@ local token_userpass = config.data.openidc_client_id .. ":" .. config.data.openi
 ---@type function
 ---@param peer string
 ---@param message string
----@param token string
-local function peer_exchange_gossip(peer, message, token)
+local function peer_exchange_gossip(peer, message)
     local httpc = resty_http.new()
     -- timeouts (connect, send, read) are in milliseconds
     httpc:set_timeouts(config.data.gossip_timeout, config.data.gossip_timeout, config.data.gossip_timeout)
     ngx.log(ngx.INFO, "Sending gossip message to ", peer)
+    
+    -- Sign the gossip message with our certificate
+    local signature = cert_auth.sign(message)
+    if not signature then
+        gossip.handle_peer_error(peer, "Failed to sign gossip message")
+        return
+    end
+    
     local res, err = httpc:request_uri(peer .. "gossip", {
         method = "POST",
         body = message,
         headers = {
             ["Content-Type"] = "application/json",
             ["Content-Length"] = #message,
-            ["Authorization"] = "Bearer " .. token,
+            ["X-Gossip-Signature"] = signature,
+            ["X-Gossip-Cert-Fingerprint"] = cert_auth.get_fingerprint(),
             ["Accept"] = "application/json",
             ["User-Agent"] = "nginx-webdav/" .. config.data.server_version,
         },
@@ -105,6 +114,15 @@ local function worker_gossip(premature)
         ngx.shared.gossip_data:set("bearer_token", token)
     end
 
+    -- Store JWT subject for certificate-bound assertions
+    local jwt_token = ngx.shared.gossip_data:get("bearer_token")
+    if jwt_token then
+        local jwt_obj, err = jwt:load_jwt(jwt_token)
+        if jwt_obj then
+            ngx.shared.gossip_data:set("jwt_subject", jwt_obj.payload.sub)
+        end
+    end
+
     -- Get the list of peers
     local peers, starting = gossip.peers()
 
@@ -115,7 +133,7 @@ local function worker_gossip(premature)
     local threads = {}
     for peer, _ in pairs(peers) do
         if starting or math.random() < config.data.gossip_fraction then
-            local co, err = ngx.thread.spawn(peer_exchange_gossip, peer, message, token)
+            local co, err = ngx.thread.spawn(peer_exchange_gossip, peer, message)
             if not co then
                 ngx.log(ngx.ERR, "Failed to spawn thread: ", err)
             end
