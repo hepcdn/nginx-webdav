@@ -12,6 +12,14 @@ if ngx.var.request_method == "DELETE" then
         ngx.say("file not found")
         return ngx.exit(ngx.OK)
     end
+    if metadata.is_directory then
+        -- Recursive collection deletion is not implemented (RFC 4918
+        -- section 9.6.1); refusing directories also protects the storage
+        -- root from being removed
+        ngx.status = ngx.HTTP_FORBIDDEN
+        ngx.say("cannot delete a directory")
+        return ngx.exit(ngx.OK)
+    end
     local suc, err = os.remove(file_path)
     if not suc then
         ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR

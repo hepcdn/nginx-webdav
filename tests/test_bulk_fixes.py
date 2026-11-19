@@ -132,3 +132,38 @@ def test_debug_mode_no_stray_server(setup_server):
     assert 80 not in listening, f"unexpected listener on port 80: {sorted(listening)}"
 
 
+def test_delete_directory_refused(
+    nginx_server: str,
+    setup_server,
+    wlcg_modify_header: dict[str, str],
+):
+    # Recursive collection deletion is not implemented, so DELETE on a
+    # directory must be refused rather than silently removing it (issue #92)
+    _podman_exec(
+        setup_server.container_id, "mkdir", "-p", "/var/www/webdav/test_del_dir"
+    )
+    response = httpx.delete(
+        f"{nginx_server}/test_del_dir/", headers=wlcg_modify_header
+    )
+    assert_status(response, httpx.codes.FORBIDDEN)
+    assert "cannot delete a directory" in response.text
+    listing = _podman_exec(setup_server.container_id, "ls", "/var/www/webdav")
+    assert "test_del_dir" in listing.split()
+
+    # The storage root is protected as well
+    response = httpx.delete(f"{nginx_server}/", headers=wlcg_modify_header)
+    assert_status(response, httpx.codes.FORBIDDEN)
+
+    # Plain files can still be deleted
+    path = f"{nginx_server}/test_del_file.txt"
+    response = httpx.put(
+        path, headers=wlcg_modify_header, content="delete me"
+    )
+    assert_status(response, httpx.codes.CREATED)
+    response = httpx.delete(path, headers=wlcg_modify_header)
+    assert_status(response, httpx.codes.NO_CONTENT)
+    _podman_exec(
+        setup_server.container_id, "rmdir", "/var/www/webdav/test_del_dir"
+    )
+
+
