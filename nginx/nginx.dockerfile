@@ -8,7 +8,7 @@ ARG RESTY_LUAROCKS_VERSION="3.13.0"
 WORKDIR /usr/local/src
 
 RUN yum groupinstall -y "Development Tools" \
-    && yum install -y pcre-devel openssl-devel
+    && yum install -y pcre-devel openssl-devel cmake libuv
 
 COPY set-default-verify-dir.patch .
 
@@ -36,6 +36,47 @@ RUN curl -Ol https://openresty.org/download/openresty-${RESTY_VERSION}.tar.gz \
     && make install
 
 RUN /usr/local/openresty/luajit/bin/luarocks install luaposix
+
+# luv (libuv bindings for Lua) with the uvbridge patch: adds
+# uv.bridge_attach()/detach()/stats(), which drive luv's libuv loop from
+# nginx's event loop (see uvbridge.c for how and why). Pinned to the
+# libuv 1.42 series so it matches the system libuv (runtime stage).
+# luv is linked against the SYSTEM libuv, as is uvbridge, so there is a
+# single libuv instance in the process. No libuv-devel package exists in
+# the distro repos, so the headers come from the matching v1.42.0 source
+# release.
+COPY uvbridge.c /usr/local/src/uvbridge.c
+COPY patches/luv-uvbridge.patch /usr/local/src/luv-uvbridge.patch
+RUN git clone --depth 1 --branch 1.42.0-1 \
+        https://github.com/luvit/luv /usr/local/src/luv-1.42.0-1 \
+    # codeload/recursive clone miss submodules; fetch the one luv.c needs
+    && git -C /usr/local/src/luv-1.42.0-1 submodule update --init --depth 1 \
+            -- deps/lua-compat-5.3 \
+    && curl -fSL "https://codeload.github.com/libuv/libuv/tar.gz/refs/tags/v1.42.0" \
+        -o /usr/local/src/libuv-1.42.0.tgz \
+    && tar xzf /usr/local/src/libuv-1.42.0.tgz -C /usr/local/src \
+    && cp -r /usr/local/src/libuv-1.42.0/include/uv /usr/include/uv \
+    && cp /usr/local/src/libuv-1.42.0/include/uv.h /usr/include/uv.h \
+    && cd /usr/local/src/luv-1.42.0-1 \
+    && patch -p1 < /usr/local/src/luv-uvbridge.patch \
+    && cp /usr/local/src/uvbridge.c src/uvbridge.c \
+    && cmake -H. -Bbuild \
+        -DBUILD_MODULE=ON \
+        -DWITH_SHARED_LIBUV=ON \
+        -DWITH_LUA_ENGINE=LuaJIT \
+        -DLUA_BUILD_TYPE=System \
+        -DLUAJIT_INCLUDE_DIR=/usr/local/openresty/luajit/include/luajit-2.1 \
+        -DLUAJIT_LIBRARIES=/usr/local/openresty/luajit/lib/libluajit-5.1.so.2 \
+        -DLIBUV_LIBRARIES=/usr/lib64/libuv.so.1 \
+        -DLIBUV_INCLUDE_DIR=/usr/include \
+        -DNGINX_SRC=/usr/local/src/openresty-1.31.8.1/bundle/nginx-1.31.8 \
+        -DNGINX_AUTO_HEADERS=/usr/local/src/openresty-1.31.8.1/build/nginx-1.31.8/objs \
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    && cmake --build build -j2 \
+    && cp build/luv.so /usr/local/openresty/luajit/lib/lua/5.1/luv.so \
+    && cd / \
+    && rm -rf /usr/local/src/luv-1.42.0-1 \
+           /usr/local/src/libuv-1.42.0 /usr/local/src/libuv-1.42.0.tgz
 
 RUN /usr/local/openresty/luajit/bin/luarocks install lua-resty-openidc
 

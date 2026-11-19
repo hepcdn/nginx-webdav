@@ -1,0 +1,50 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f8732b5..6220a51 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -200,8 +200,16 @@ if (EXISTS "${LUA_INCLUDE_DIR}/lua.h")
+     endif()
+ endif()
+ 
++if (NGINX_SRC)
++  # uvbridge: drive this loop from nginx's event loop
++  include_directories(${NGINX_SRC}/src/core ${NGINX_SRC}/src/event ${NGINX_SRC}/src/event/quic ${NGINX_SRC}/src/os/unix ${NGINX_SRC}/src ${NGINX_AUTO_HEADERS})
++endif (NGINX_SRC)
+ if (BUILD_MODULE)
+-  add_library(luv MODULE src/luv.c)
++  if (NGINX_SRC)
++    add_library(luv MODULE src/luv.c src/uvbridge.c)
++  else()
++    add_library(luv MODULE src/luv.c)
++  endif()
+   set_target_properties(luv PROPERTIES PREFIX "")
+   list(APPEND ACTIVE_TARGETS "luv")
+ endif (BUILD_MODULE)
+diff --git a/src/luv.c b/src/luv.c
+index 7cc2277..70a01f9 100644
+--- a/src/luv.c
++++ b/src/luv.c
+@@ -50,6 +50,11 @@
+ #include "util.c"
+ #include "work.c"
+ 
++/* uvbridge.c: drive this loop from nginx's event loop */
++int luv_bridge_attach(lua_State* L);
++int luv_bridge_detach(lua_State* L);
++int luv_bridge_stats(lua_State* L);
++
+ static const luaL_Reg luv_functions[] = {
+   // loop.c
+   {"loop_close", luv_loop_close},
+@@ -66,6 +71,11 @@ static const luaL_Reg luv_functions[] = {
+   {"loop_configure", luv_loop_configure},
+ #endif
+ 
++  // uvbridge.c
++  {"bridge_attach", luv_bridge_attach},
++  {"bridge_detach", luv_bridge_detach},
++  {"bridge_stats", luv_bridge_stats},
++
+   // req.c
+   {"cancel", luv_cancel},
+ #if LUV_UV_VERSION_GEQ(1, 19, 0)

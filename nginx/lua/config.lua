@@ -37,6 +37,12 @@ local Config = {
         -- This is used in cksumutil
         checksum_block_size = 64*1024*1024,
 
+        -- libuv event-loop bridge (see nginx/uvbridge.c): drives luv's
+        -- libuv loop from nginx's event loop so libuv handles make
+        -- progress without blocking the worker
+        uvbridge_enabled = false,
+        uvbridge_tick = 10, -- in milliseconds
+
         -- discovery = "https://cms-auth.cern.ch/.well-known/openid-configuration",
         openidc_iss = "https://cms-auth.cern.ch/",
         openidc_pubkey = [[-----BEGIN PUBLIC KEY-----

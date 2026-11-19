@@ -296,6 +296,9 @@ def setup_server(build_container: None, oidc_mock_idp: MockIdP):
         "openidc_client_secret": "nginx1_secret",
         "public_client_id": "test_public_client_id",
         "receive_buffer_size": 4096,
+        # Run the libuv event-loop bridge in all test workers
+        "uvbridge_enabled": True,
+        "uvbridge_tick": 10,
         # Give the container a (hopefully) unique ID that is returned in a
         # health check so that we can verify that the service we started is the
         # same one we're connecting to
@@ -318,6 +321,10 @@ def setup_server(build_container: None, oidc_mock_idp: MockIdP):
         "/var/www/webdav:rw,size=100M,mode=1777",
         "-e",
         "DEBUG=true",
+        # Let the container reach the mock IdP on the host (podman provides
+        # host.docker.internal implicitly; docker-on-linux needs it explicitly)
+        "--add-host",
+        "host.docker.internal:host-gateway",
         # Set the name of the container so it will fail early if the old
         # container wasn't cleaned up
         "--name",
@@ -421,6 +428,10 @@ def setup_cluster(build_container: None, oidc_mock_idp: MockIdP):
             f"PORT={8580 + i}",
             "-e",
             "DEBUG=true",
+            # Let the container reach the mock IdP on the host (podman provides
+            # host.docker.internal implicitly; docker-on-linux needs it explicitly)
+            "--add-host",
+            "host.docker.internal:host-gateway",
             "--name",
             f"nginx-webdav-test{i}",
         ]
