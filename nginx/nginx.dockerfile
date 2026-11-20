@@ -39,6 +39,11 @@ RUN /usr/local/openresty/luajit/bin/luarocks install luaposix
 
 RUN /usr/local/openresty/luajit/bin/luarocks install lua-resty-openidc
 
+# Direct dependency of nginx/lua/cert_auth.lua (resty.openssl.*).
+# Also pulled in transitively by lua-resty-openidc, but we require it
+# directly, so install it explicitly.
+RUN /usr/local/openresty/luajit/bin/luarocks install lua-resty-openssl
+
 RUN /usr/local/openresty/luajit/bin/luarocks install lua-zlib
 
 FROM docker.io/almalinux:9
