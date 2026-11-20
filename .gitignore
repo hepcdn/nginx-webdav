@@ -3,3 +3,7 @@ nginx/lua/config.json
 data/
 .vscode/
 site.conf
+# C build artifacts (as_user.so is compiled inside the image; test_as_user
+# is built by the Dockerfile build stage). Never commit local builds.
+nginx/*.so
+nginx/test_as_user

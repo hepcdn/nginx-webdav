@@ -149,12 +149,17 @@ Config (`config.json`):
 
 ### 2. Privileged syscalls — `nginx/as_user.c` (new) + `nginx/lua/asuser.lua` (new)
 
-`as_user.c` exports four functions, each a single straight-line sequence as
+`as_user.c` exports five functions, each a single straight-line sequence as
 described above; all paths are validated to stay under the configured
 storage root (a `..` path segment is rejected — defense in depth on the
 existing traversal fix). The C file is compiled into `as_user.so` during the
 image build (`gcc -O2 -Wall -Wextra -shared -fPIC`) and loaded by
-`asuser.lua` via `ffi.load` (same FFI pattern as `cksumutil.lua`):
+`asuser.lua` via `ffi.load` (same FFI pattern as `cksumutil.lua`).
+`nginx/test_as_user.c` unit-tests the module directly (effective-uid/gid
+switch, path containment, errno convention, fail-closed guard without
+CAP_SETUID) and is compiled and run in the image build stage, so a
+regression fails the build; the binary is also shipped to
+`/usr/local/bin/test_as_user` and re-run by the pytest suite.
 
 | Function | Used by |
 |---|---|
@@ -162,6 +167,7 @@ image build (`gcc -O2 -Wall -Wextra -shared -fPIC`) and loaded by
 | `as_user_open(uid, gid, root, path, flags, mode)` | PUT open-for-write (`0644`); `asuser.open_for_read` for the phase-2 read path |
 | `as_user_unlink(uid, gid, root, path)` | DELETE |
 | `as_user_rename(uid, gid, root, src, dst)` | reserved for MOVE |
+| `as_user_setxattr(uid, gid, root, path, name, value, size, flags)` | adler32 checksum xattr persistence (write path + read-path backfill), so metadata writes are subject to the file's POSIX permissions |
 
 `asuser.lua` wraps these: returns `(nil, errmsg, class)` on failure with
 `class ∈ {forbidden, not_found, error}` mapped from `errno`

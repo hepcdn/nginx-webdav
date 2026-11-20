@@ -329,6 +329,7 @@ def setup_server(build_container: None, oidc_mock_idp: MockIdP):
         "--name",
         "nginx-unit-test-container",
     ]
+    podman_cmd.extend(_host_alias_args())
     podman_cmd.append("nginx-webdav")
     container_id = subprocess.check_output(podman_cmd).decode().strip()
     try:
@@ -386,6 +387,17 @@ def _find_free_port(start: int) -> int:
     raise RuntimeError("no free port found")
 
 
+def _host_alias_args() -> list[str]:
+    # host.docker.internal resolves out of the box in the environments
+    # where the suite runs natively (podman), but docker does not provide
+    # it by default. When this host provides the engine through a
+    # podman-compatible shim, map the name to the host gateway so the
+    # containers can reach local peers (TPC tests).
+    if os.path.exists("/var/run/docker.sock"):
+        return ["--add-host", "host.docker.internal:host-gateway"]
+    return []
+
+
 def _start_usermapped_server(
     oidc_mock_idp: MockIdP,
     container_name: str,
@@ -430,6 +442,7 @@ def _start_usermapped_server(
         "--name",
         container_name,
     ]
+    podman_cmd.extend(_host_alias_args())
     podman_cmd.append("nginx-webdav")
     container_id = subprocess.check_output(podman_cmd).decode().strip()
     try:
@@ -508,6 +521,9 @@ def usermapped_server(build_container: None, oidc_mock_idp: MockIdP):
         accounts=[
             ("testuser", 10001, 10001),
             ("testuser2", 10002, 10002),
+            # uid and primary gid deliberately differ: proves the mapped
+            # group (egid) is set independently of the mapped user
+            ("testuser3", 10003, 20003),
         ],
         start_port=8480,
     )
@@ -530,6 +546,30 @@ def usermapped_fallback_server(build_container: None, oidc_mock_idp: MockIdP):
         cfg_name="config-usermap-fallback.json",
         accounts=[("testuser", 10001, 10001)],
         start_port=8490,
+    )
+
+
+@pytest.fixture(scope="session")
+def usermapped_guards_server(build_container: None, oidc_mock_idp: MockIdP):
+    """A server with user_mapping plus the on_missing and uid_range guards.
+
+    Tokens without the claim are rejected (on_missing=deny) and mapped uids
+    outside [10000, 10010] are rejected.
+    """
+    yield from _start_usermapped_server(
+        oidc_mock_idp,
+        container_name="nginx-usermap-guards",
+        user_mapping={
+            "claim": "name",
+            "on_missing": "deny",
+            "uid_range": [10000, 10010],
+        },
+        cfg_name="config-usermap-guards.json",
+        accounts=[
+            ("testuser", 10001, 10001),
+            ("testuser4", 10100, 10100),
+        ],
+        start_port=8500,
     )
 
 
@@ -584,6 +624,7 @@ def setup_cluster(build_container: None, oidc_mock_idp: MockIdP):
             "--name",
             f"nginx-webdav-test{i}",
         ]
+        podman_cmd.extend(_host_alias_args())
         podman_cmd.append("nginx-webdav")
         container_id = subprocess.check_output(podman_cmd).decode().strip()
         container_ids.append(container_id)
