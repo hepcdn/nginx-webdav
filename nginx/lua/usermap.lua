@@ -116,8 +116,11 @@ function usermap.resolve(claims)
     end
 
     -- Hard guards: never allow root (default) or uids outside the range,
-    -- whether they came from getpwnam or from the fallback.
-    if denied_uid(m.deny_uids, owner.uid) or not uid_in_range(m.uid_range, owner.uid) then
+    -- whether they came from getpwnam or from the fallback. deny_uids
+    -- defaults to {0}: a config that omits it must still never map to
+    -- root.
+    if denied_uid(m.deny_uids or { 0 }, owner.uid)
+        or not uid_in_range(m.uid_range, owner.uid) then
         if cache then
             cache:set(key, "deny", CACHE_TTL)
         end
