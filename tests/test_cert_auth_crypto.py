@@ -119,13 +119,19 @@ def interop_env(tmp_path):
 
 
 def _run_driver(workdir):
-    return subprocess.run(
+    result = subprocess.run(
         ["podman", "run", "--rm",
          "-e", "LD_PRELOAD=/lib64/libcrypto.so.3",
          "-v", f"{workdir}:/work",
          "nginx-webdav",
          "/usr/local/openresty/luajit/bin/luajit", "/work/driver.lua"],
-        capture_output=True, text=True, check=True)
+        capture_output=True, text=True)
+    if result.returncode != 0:
+        raise AssertionError(
+            f"driver exited {result.returncode}\n"
+            f"--- stdout ---\n{result.stdout}\n"
+            f"--- stderr ---\n{result.stderr}")
+    return result
 
 
 def test_cert_auth_fingerprint_matches_openssl(build_container, interop_env):
