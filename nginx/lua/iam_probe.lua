@@ -14,7 +14,9 @@
 
 local ngx = require("ngx")
 local resty_http = require("resty.http")
-local cjson = require("cjson")
+-- cjson.safe is a separate module entry point (require("cjson") has no
+-- .safe field): decode() returns nil on non-JSON instead of throwing.
+local cjson = require("cjson.safe")
 local config = require("config")
 
 local IamProbe = {}
@@ -59,7 +61,7 @@ function IamProbe.detect_rfc8705()
 
     -- cjson.decode throws on malformed input; a non-JSON error page from
     -- the IAM must not take the caller down.
-    local metadata = cjson.safe.decode(res.body)
+    local metadata = cjson.decode(res.body)
     if type(metadata) ~= "table" then
         ngx.log(ngx.WARN, "IAM metadata response is not valid JSON; using fallback authentication")
         dict:set(IamProbe.MODE_KEY, "fallback", RETRY_TTL)
