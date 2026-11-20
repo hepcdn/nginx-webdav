@@ -53,6 +53,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
+#include <sys/xattr.h>
 #include <unistd.h>
 
 #ifndef PATH_MAX
@@ -263,6 +264,32 @@ int as_user_close_fd(int fd) {
     int r = close(fd);
     if (r != 0) {
         return -errno;
+    }
+    return 0;
+}
+
+/*
+ * Set an extended attribute on `path` with the mapped user's effective
+ * credentials, so the metadata write is subject to the same POSIX
+ * permissions as the file itself (a user.* xattr requires write access to
+ * the file; the worker's own identity would bypass that check). Same
+ * single-syscall switch/restore discipline as the other operations.
+ */
+int as_user_setxattr(int uid, int gid, const char *root, const char *path,
+                     const char *name, const char *value, size_t size,
+                     int flags) {
+    if (!as_user_valid_path(root, path)) {
+        return -EPERM;
+    }
+    int switched = as_user_switch(uid, gid);
+    if (switched != 0) {
+        return switched;
+    }
+    int rc = setxattr(path, name, value, size, flags);
+    int saved = errno;
+    as_user_restore();
+    if (rc != 0) {
+        return -saved;
     }
     return 0;
 }

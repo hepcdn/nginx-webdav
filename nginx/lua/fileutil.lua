@@ -16,8 +16,9 @@ end
 ---@type function
 ---@param file_path string
 ---@param want_adler32 boolean
+---@param owner {uid:integer, gid:integer}?
 ---@return {exists:boolean, is_directory:boolean, size:integer, adler32:string}
-function fileutil.get_metadata(file_path, want_adler32)
+function fileutil.get_metadata(file_path, want_adler32, owner)
     local stat = sys_stat.stat(file_path)
 
     if not stat then
@@ -35,7 +36,7 @@ function fileutil.get_metadata(file_path, want_adler32)
     local err = nil
     local adler32 = nil
     if want_adler32 then
-        err, adler32 = cksumutil.get_adler32(file_path)
+        err, adler32 = cksumutil.get_adler32(file_path, owner)
         if not adler32 then
             ngx.log(ngx.ERR, "Failed to get adler32 for " .. file_path .. " err: " .. err)
         end
@@ -220,7 +221,7 @@ function fileutil.sink_to_file(file_path, reader, perfmarkers, owner)
     end
 
     local adler32 = cksumutil.adler32_to_string(adler_state)
-    cksumutil.set_adler32(file_path, adler32)
+    cksumutil.set_adler32(file_path, adler32, owner)
     ngx.log(ngx.NOTICE, bytes_written, " total bytes written to ", file_path, " with adler32 ", adler32)
     return nil, adler32
 end

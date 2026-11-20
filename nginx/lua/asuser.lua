@@ -38,6 +38,8 @@ int as_user_unlink(int uid, int gid, const char *root, const char *path);
 int as_user_rename(int uid, int gid, const char *root, const char *src, const char *dst);
 int as_user_write(int fd, const char *buf, int n);
 int as_user_close_fd(int fd);
+int as_user_setxattr(int uid, int gid, const char *root, const char *path,
+    const char *name, const char *value, size_t size, int flags);
 ]]
 
 local lib = ffi.load("/usr/local/openresty/site/lualib/as_user.so")
@@ -151,6 +153,25 @@ function asuser.close_fd(fd)
     local r = lib.as_user_close_fd(fd)
     if r ~= 0 then
         return nil, "errno " .. (-r)
+    end
+    return nil
+end
+
+---Set an extended attribute on `path` as the mapped user, so the metadata
+---write is subject to the file's POSIX permissions like the data write is
+---(the worker's own identity would bypass them).
+---@param owner {uid: integer, gid: integer}
+---@param path string
+---@param key string
+---@param value string
+---@return nil?, string? err, string? class
+function asuser.setxattr(owner, path, key, value)
+    local vbuf = ffi.new("char[?]", #value)
+    ffi.copy(vbuf, value, #value)
+    local r = lib.as_user_setxattr(owner.uid, owner.gid, config.data.local_path, path, key, vbuf, #value, 0)
+    if r ~= 0 then
+        local errno = -r
+        return "failed to set xattr " .. key .. " on " .. path .. ": errno " .. errno, classify(errno)
     end
     return nil
 end
