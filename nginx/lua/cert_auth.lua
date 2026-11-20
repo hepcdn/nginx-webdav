@@ -13,6 +13,15 @@
 local ngx = require("ngx")
 local resty_openssl_pkey = require("resty.openssl.pkey")
 local resty_openssl_x509 = require("resty.openssl.x509")
+local resty_openssl_store = require("resty.openssl.x509.store")
+
+-- This OpenResty build does not ship ngx.encode_hex (it is nil in every
+-- phase), so hex-encode digests by hand.
+local function hex_encode(s)
+    return (s:gsub(".", function(c)
+        return string.format("%02x", string.byte(c))
+    end))
+end
 
 local CertAuth = {
     -- Certificate and key paths
@@ -29,6 +38,11 @@ local CertAuth = {
     -- Cached parsed objects (one per worker lua_State)
     cert_obj = nil,
     pkey_obj = nil,
+
+    -- CA store for chain verification: nil = not loaded yet,
+    -- false = load failed, "empty" = no CA files in ca_dir,
+    -- table = a working resty.openssl.x509.store
+    ca_store = nil,
 }
 
 --- Load certificate and key from files
@@ -111,7 +125,7 @@ function CertAuth.compute_fingerprint()
         return false
     end
 
-    CertAuth.cert_fingerprint = "sha256:" .. ngx.encode_hex(digest)
+    CertAuth.cert_fingerprint = "sha256:" .. hex_encode(digest)
     return true
 end
 
@@ -210,6 +224,95 @@ function CertAuth.get_subject()
         end
     end
     return CertAuth.cert_subject
+end
+
+--- Get the loaded certificate PEM (nil if it could not be loaded)
+function CertAuth.get_cert()
+    if not CertAuth.cert then
+        if not CertAuth.load_cert() then
+            return nil
+        end
+    end
+    return CertAuth.cert
+end
+
+--- Compute the SHA-256 fingerprint of an arbitrary certificate PEM
+function CertAuth.fingerprint_of(cert_pem)
+    local cert_obj, err = resty_openssl_x509.new(cert_pem, "PEM")
+    if not cert_obj then
+        return nil, err
+    end
+    local digest, err = cert_obj:digest("sha256")
+    if not digest then
+        return nil, err
+    end
+    return "sha256:" .. hex_encode(digest)
+end
+
+--- Load the trust store from ca_dir (once per worker lua_State)
+local function load_ca_store()
+    if CertAuth.ca_store ~= nil then
+        return CertAuth.ca_store
+    end
+
+    local store, err = resty_openssl_store.new()
+    if not store then
+        ngx.log(ngx.ERR, "Failed to create CA store: " .. err)
+        CertAuth.ca_store = false
+        return CertAuth.ca_store
+    end
+
+    -- Enumerate the CA files (hashed symlinks aside, IGTF-style CA
+    -- directories are flat file collections)
+    local files = {}
+    local cmd = "ls -1 " .. CertAuth.ca_dir
+        .. "/*.pem " .. CertAuth.ca_dir .. "/*.crt 2>/dev/null"
+    local p = io.popen(cmd)
+    if p then
+        for line in p:lines() do
+            table.insert(files, line)
+        end
+        p:close()
+    end
+
+    local count = 0
+    for _, file in ipairs(files) do
+        local ok, lerr = store:load_file(file)
+        if not ok then
+            ngx.log(ngx.WARN, "Failed to load CA certificate " .. file
+                .. ": " .. (lerr or "unknown"))
+        else
+            count = count + 1
+        end
+    end
+
+    if count == 0 then
+        ngx.log(ngx.WARN, "No CA certificates found in " .. CertAuth.ca_dir
+            .. "; gossip chain verification is not possible")
+        CertAuth.ca_store = "empty"
+    else
+        CertAuth.ca_store = store
+    end
+    return CertAuth.ca_store
+end
+
+--- Verify a certificate chains to a trusted CA in ca_dir.
+-- Returns true (chains to a trusted CA), false (does not chain),
+-- or nil (no trust anchors configured, so verification is impossible).
+function CertAuth.verify_chain(cert_pem)
+    local store = load_ca_store()
+    if type(store) ~= "table" then
+        return nil
+    end
+    local cert_obj, err = resty_openssl_x509.new(cert_pem, "PEM")
+    if not cert_obj then
+        return false, err
+    end
+    local ok, err = store:verify(cert_obj)
+    if ok then
+        return true
+    end
+    return false, err
 end
 
 return CertAuth

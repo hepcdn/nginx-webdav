@@ -34,6 +34,7 @@ local function peer_exchange_gossip(peer, message)
     
     -- In RFC 8705 mode, sign the gossip message with our certificate
     local signature = gossip_auth.sign_message(message)
+    local our_cert = gossip_auth.get_cert()
     
     local headers = {
         ["Content-Type"] = "application/json",
@@ -42,9 +43,19 @@ local function peer_exchange_gossip(peer, message)
         ["User-Agent"] = "nginx-webdav/" .. config.data.server_version,
     }
     
-    if signature then
+    if signature and our_cert then
         headers["X-Gossip-Signature"] = signature
         headers["X-Gossip-Cert-Fingerprint"] = gossip_auth.get_fingerprint()
+        -- Send our certificate so the receiver can verify the signature
+        -- and our fingerprint against it.
+        headers["X-Gossip-Cert"] = ngx.encode_base64(our_cert)
+        -- Keep sending the bearer: the /gossip access phase still
+        -- validates it; the certificate and signature add the
+        -- certificate binding on top.
+        local token = ngx.shared.gossip_data:get("bearer_token")
+        if token then
+            headers["Authorization"] = "Bearer " .. token
+        end
     else
         -- Fallback mode: use JWT token in Authorization header
         local token = ngx.shared.gossip_data:get("bearer_token")

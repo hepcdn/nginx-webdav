@@ -71,12 +71,61 @@ function GossipAuth.sign_message(message)
 end
 
 --- Verify a message signature (RFC 8705 mode)
-function GossipAuth.verify_message(message, signature, cert_pem)
+-- The sender's certificate is verified, not just the signature:
+-- a claimed fingerprint must match the certificate, and (when trust
+-- anchors are configured in ca_dir) the certificate must chain to one
+-- of them. A message only merges after all checks pass; verified peer
+-- certificates are remembered in GossipAuth.peer_certs.
+function GossipAuth.verify_message(message, signature, cert_pem, claimed_fingerprint)
     if GossipAuth.get_mode() ~= "rfc8705" then
         return true  -- No verification in fallback mode
     end
+    if not cert_pem then
+        ngx.log(ngx.WARN, "gossip_auth: no certificate provided for verification")
+        return false
+    end
 
-    return cert_auth.verify(message, signature, cert_pem)
+    -- A claimed fingerprint must match the provided certificate
+    local actual_fingerprint, err = cert_auth.fingerprint_of(cert_pem)
+    if not actual_fingerprint then
+        ngx.log(ngx.WARN, "gossip_auth: cannot parse sender certificate: "
+            .. (err or "unknown"))
+        return false
+    end
+    if claimed_fingerprint and claimed_fingerprint ~= actual_fingerprint then
+        ngx.log(ngx.WARN, "gossip_auth: fingerprint mismatch: claimed "
+            .. claimed_fingerprint .. " but certificate has "
+            .. actual_fingerprint)
+        return false
+    end
+
+    -- The certificate must chain to a trusted CA (when anchors exist)
+    local chain_ok, cerr = cert_auth.verify_chain(cert_pem)
+    if chain_ok == false then
+        ngx.log(ngx.WARN, "gossip_auth: sender certificate does not chain "
+            .. "to a trusted CA: " .. (cerr or "unknown"))
+        return false
+    end
+    -- chain_ok == nil: no trust anchors configured; the signature
+    -- check below still applies
+
+    local ok, verr = cert_auth.verify(message, signature, cert_pem)
+    if not ok then
+        ngx.log(ngx.WARN, "gossip_auth: signature verification failed: "
+            .. (verr or "bad signature"))
+        return false
+    end
+
+    GossipAuth.peer_certs[actual_fingerprint] = cert_pem
+    return true
+end
+
+--- Get our certificate PEM (for sending to peers in RFC 8705 mode)
+function GossipAuth.get_cert()
+    if GossipAuth.get_mode() ~= "rfc8705" then
+        return nil
+    end
+    return cert_auth.get_cert()
 end
 
 --- Get our certificate fingerprint

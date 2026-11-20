@@ -38,7 +38,10 @@ end
 ---Add a peer to the list of peers
 ---No op if the peer is already in the list
 function Gossip.add_peer(peer)
-    local peerstr = ngx.shared.gossip_data:get("peers")
+    -- "peers" is initialized by the gossip timer (Gossip.peers); a
+    -- received message can arrive before the timer has run, so treat a
+    -- missing key as an empty list instead of crashing.
+    local peerstr = ngx.shared.gossip_data:get("peers") or ""
     ---@cast peerstr string
     if peerstr:find(peer, 1, true) == nil then
         ngx.shared.gossip_data:set("peers", peerstr .. peer .. ",")
@@ -51,7 +54,7 @@ end
 function Gossip.remove_peer(peer)
     -- Flush any timestamp
     ngx.shared.gossip_data:set("timestamp:" .. peer, nil)
-    local peerstr = ngx.shared.gossip_data:get("peers")
+    local peerstr = ngx.shared.gossip_data:get("peers") or ""
     ---@cast peerstr string
     local pos, endpos = peerstr:find(peer, 1, true)
     if not pos then

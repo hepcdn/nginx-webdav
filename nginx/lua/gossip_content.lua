@@ -15,20 +15,34 @@ if ngx.var.request_method == "POST" then
         local mode = gossip_auth.get_mode()
         
         if mode == "rfc8705" then
-            -- RFC 8705 mode: verify certificate signature
+            -- RFC 8705 mode: verify the sender's certificate and the
+            -- signature over the exact message body before merging
             local signature = ngx.var.http_x_gossip_signature
+            local cert_b64 = ngx.var.http_x_gossip_cert
             local cert_fingerprint = ngx.var.http_x_gossip_cert_fingerprint
-            
-            if not signature then
-                ngx.log(ngx.WARN, "RFC 8705 mode: gossip message missing signature")
+
+            if not signature or not cert_b64 then
+                ngx.log(ngx.WARN, "RFC 8705 mode: gossip message missing signature or certificate")
                 ngx.status = ngx.HTTP_UNAUTHORIZED
-                ngx.say("missing signature")
+                ngx.say("missing signature or certificate")
                 return ngx.exit(ngx.OK)
             end
-            
-            -- In production, verify signature against known peer certificates
-            -- This requires the peer's certificate to be available
-            ngx.log(ngx.INFO, "RFC 8705 mode: gossip message signed by: " .. (cert_fingerprint or "unknown"))
+
+            local cert_pem, derr = ngx.decode_base64(cert_b64)
+            if not cert_pem then
+                ngx.log(ngx.WARN, "RFC 8705 mode: sender certificate is not valid base64")
+                ngx.status = ngx.HTTP_UNAUTHORIZED
+                ngx.say("invalid certificate")
+                return ngx.exit(ngx.OK)
+            end
+
+            if not gossip_auth.verify_message(data, signature, cert_pem, cert_fingerprint) then
+                ngx.status = ngx.HTTP_UNAUTHORIZED
+                ngx.say("signature verification failed")
+                return ngx.exit(ngx.OK)
+            end
+            ngx.log(ngx.INFO, "RFC 8705 mode: verified gossip message from "
+                .. (cert_fingerprint or "unknown peer"))
         else
             -- Fallback mode: JWT validation is done by hepcdn_access.lua
             ngx.log(ngx.INFO, "Fallback mode: accepting gossip message")
