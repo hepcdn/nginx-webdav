@@ -81,7 +81,7 @@ local function third_party_pull(source_uri, destination_localpath, redirects)
     end
 
     local adler32 = nil
-    err, adler32 = fileutil.sink_to_file(destination_localpath, res.body_reader, true)
+    err, adler32 = fileutil.sink_to_file(destination_localpath, res.body_reader, true, ngx.ctx.fs_owner)
 
     if not adler32 then
         ngx.say("failure: error while receiving data: ", err)

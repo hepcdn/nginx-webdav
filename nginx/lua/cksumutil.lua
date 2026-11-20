@@ -1,6 +1,7 @@
 local ffi = require("ffi")
 local config = require("config")
 local zlib = require("zlib")
+local asuser = require("asuser")
 
 -- some lua-isms added from https://github.com/user-none/lua-hashings/
 
@@ -13,9 +14,12 @@ local adler_xattr_locations = {
 
 ---@type function
 ---@param path string
+---@param owner {uid:integer, gid:integer}?
 ---@return string? err, string? val
----Gets the adler32 of a file, calculating it if it doesn't exist
-function cksumutil.get_adler32(path)
+---Gets the adler32 of a file, calculating it if it doesn't exist. If owner
+---is given, a missing checksum is persisted with the mapped user's
+---credentials (see cksumutil.set_adler32).
+function cksumutil.get_adler32(path, owner)
   local err, val = cksumutil.check_adler32(path)
   if err or val == nil then
     -- We checked and didn't see an adler32, so make one
@@ -23,7 +27,7 @@ function cksumutil.get_adler32(path)
     if not get_val then
       return get_err, nil
     end
-    local set_err = cksumutil.set_adler32(path, get_val)
+    local set_err = cksumutil.set_adler32(path, get_val, owner)
     if set_err then
       ngx.log(ngx.ERR, "Failed to set adler32 for " .. path .. " err: " .. set_err)
     end
@@ -35,14 +39,21 @@ end
 ---@type function
 ---@param path string
 ---@param value string
+---@param owner {uid:integer, gid:integer}?
 ---@return string? err
----Sets the adler32 of a file
-function cksumutil.set_adler32(path, value)
+---Sets the adler32 of a file. If owner is given, the xattrs are set with
+---the mapped user's effective credentials, so the metadata write is
+---subject to the file's POSIX permissions; otherwise the worker's own
+---identity is used (legacy behavior).
+function cksumutil.set_adler32(path, value, owner)
   local total_err = nil
   for i=1,#adler_xattr_locations do
-    local err = cksumutil.setxattr(path,
-    adler_xattr_locations[i],
-    value)
+    local err
+    if owner then
+      err = asuser.setxattr(owner, path, adler_xattr_locations[i], value)
+    else
+      err = cksumutil.setxattr(path, adler_xattr_locations[i], value)
+    end
     if err then
       total_err = err
     end

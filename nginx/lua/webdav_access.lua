@@ -53,5 +53,18 @@ if string.find(res.scope, "storage.read:/") == nil and is_modify then
     return ngx.exit(ngx.OK)
 end
 
--- storage.stage: Read the data, potentially causing data to be staged from a nearline resource to an online resource. This is a superset of storage.read.
+-- storage.stage: Read the data, potentially causing the data to be staged from a nearline resource to an online resource. This is a superset of storage.read.
 -- TODO: implement this
+
+-- Map the verified token to a local unix account for file ownership.
+-- Opt-in via user_mapping in config.json (see nginx/lua/usermap.lua); when
+-- disabled, or when the token has no mapping, owner is nil and file I/O
+-- runs as root (legacy behavior).
+local usermap = require("usermap")
+local owner, owner_err = usermap.resolve(res)
+if owner_err then
+    ngx.status = ngx.HTTP_FORBIDDEN
+    ngx.say(owner_err)
+    return ngx.exit(ngx.OK)
+end
+ngx.ctx.fs_owner = owner

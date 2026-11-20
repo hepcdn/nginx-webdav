@@ -2,6 +2,7 @@ local ngx = require("ngx")
 local config = require("config")
 local http = require("resty.http")
 local fileutil = require("fileutil")
+local asuser = require("asuser")
 
 local file_path = fileutil.get_request_local_path()
 local metadata = fileutil.get_metadata(file_path, false)
@@ -12,11 +13,29 @@ if ngx.var.request_method == "DELETE" then
         ngx.say("file not found")
         return ngx.exit(ngx.OK)
     end
-    local suc, err = os.remove(file_path)
-    if not suc then
-        ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
-        ngx.say("failed to delete file: ", err)
-        return ngx.exit(ngx.OK)
+    local owner = ngx.ctx.fs_owner
+    if owner then
+        -- Root sees the file, but the mapped user may not be able to delete
+        -- it (e.g. no write permission on the containing directory)
+        local ok, uerr, uclass = asuser.unlink(owner, file_path)
+        if not ok then
+            if uclass == "forbidden" then
+                ngx.status = ngx.HTTP_FORBIDDEN
+            elseif uclass == "not_found" then
+                ngx.status = ngx.HTTP_NOT_FOUND
+            else
+                ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
+            end
+            ngx.say(uerr)
+            return ngx.exit(ngx.OK)
+        end
+    else
+        local suc, err = os.remove(file_path)
+        if not suc then
+            ngx.status = ngx.HTTP_INTERNAL_SERVER_ERROR
+            ngx.say("failed to delete file: ", err)
+            return ngx.exit(ngx.OK)
+        end
     end
     ngx.status = ngx.HTTP_NO_CONTENT
     ngx.say("file deleted")
@@ -64,6 +83,8 @@ local function exit(status, message, digest)
         [201] = "Created",
         [204] = "No Content",
         [400] = "Bad Request",
+        [403] = "Forbidden",
+        [404] = "Not Found",
         [500] = "Internal Server Error",
     }
     local response = {
@@ -94,11 +115,14 @@ if not reader then
     return exit(ngx.HTTP_INTERNAL_SERVER_ERROR, "failed to get the request body reader")
 end
 
-local adler32 = nil
-err, adler32 = fileutil.sink_to_file(file_path, reader)
-if err then
-    -- TODO: choose more appropriate status code based on error
-    return exit(ngx.HTTP_INTERNAL_SERVER_ERROR, err)
+local sink_err, adler32, errclass = fileutil.sink_to_file(file_path, reader, nil, ngx.ctx.fs_owner)
+if sink_err then
+    if errclass == "forbidden" then
+        return exit(ngx.HTTP_FORBIDDEN, sink_err)
+    elseif errclass == "not_found" then
+        return exit(ngx.HTTP_NOT_FOUND, sink_err)
+    end
+    return exit(ngx.HTTP_INTERNAL_SERVER_ERROR, sink_err)
 end
 
 local digest = nil

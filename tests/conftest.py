@@ -60,7 +60,11 @@ class MockIdP:
         return jwt.encode(payload, self.private_key, algorithm="RS256")
 
     def make_wlcg_token(
-        self, scope: str, sub: str = "user123", client_id: str = "user123"
+        self,
+        scope: str,
+        sub: str = "user123",
+        client_id: str = "user123",
+        name: str | None = None,
     ) -> str:
         """Generate a WLCG-compatible bearer token.
 
@@ -85,6 +89,8 @@ class MockIdP:
             "jti": str(uuid.uuid4()),
             "client_id": client_id,
         }
+        if name is not None:
+            token["name"] = name
         return self.encode_jwt(token)
 
 
@@ -323,6 +329,7 @@ def setup_server(build_container: None, oidc_mock_idp: MockIdP):
         "--name",
         "nginx-unit-test-container",
     ]
+    podman_cmd.extend(_host_alias_args())
     podman_cmd.append("nginx-webdav")
     container_id = subprocess.check_output(podman_cmd).decode().strip()
     try:
@@ -371,6 +378,199 @@ def setup_server(build_container: None, oidc_mock_idp: MockIdP):
         _remove_container(container_id)
         # Clean up
         os.remove("nginx/lua/config.json")
+
+
+def _find_free_port(start: int) -> int:
+    for port in range(start, start + 100):
+        with socketserver.TCPServer(("", port), None):
+            return port
+    raise RuntimeError("no free port found")
+
+
+def _host_alias_args() -> list[str]:
+    # host.docker.internal resolves out of the box in the environments
+    # where the suite runs natively (podman), but docker does not provide
+    # it by default. When this host provides the engine through a
+    # podman-compatible shim, map the name to the host gateway so the
+    # containers can reach local peers (TPC tests).
+    if os.path.exists("/var/run/docker.sock"):
+        return ["--add-host", "host.docker.internal:host-gateway"]
+    return []
+
+
+def _start_usermapped_server(
+    oidc_mock_idp: MockIdP,
+    container_name: str,
+    user_mapping: dict,
+    cfg_name: str,
+    accounts: list[tuple[str, int, int]],
+    start_port: int,
+):
+    """Start a server with user_mapping enabled and local unix accounts.
+
+    accounts is a list of (name, uid, gid) tuples created in the container.
+    """
+    config = {
+        "openidc_iss": oidc_mock_idp.iss,
+        "openidc_pubkey": oidc_mock_idp.public_key_pem,
+        "openidc_client_id": "nginx1",
+        "openidc_client_secret": "nginx1_secret",
+        "public_client_id": "test_public_client_id",
+        "receive_buffer_size": 4096,
+        "health_check_id": random.randint(0, 1024 * 1024 * 1024),
+        "performance_marker_timeout": 2,
+        "user_mapping": user_mapping,
+    }
+    with open(f"nginx/lua/{cfg_name}", "w") as f:
+        json.dump(config, f)
+
+    port = _find_free_port(start_port)
+    podman_cmd = [
+        "podman",
+        "run",
+        "-d",
+        "-p",
+        f"{port}:8080",
+        "-v",
+        f"./nginx/lua/{cfg_name}:/etc/nginx/lua/config.json:ro",
+        "--tmpfs",
+        "/var/www/webdav:rw,size=100M,mode=1777",
+        "-e",
+        "DEBUG=true",
+        # Set the name of the container so it will fail early if the old
+        # container wasn't cleaned up
+        "--name",
+        container_name,
+    ]
+    podman_cmd.extend(_host_alias_args())
+    podman_cmd.append("nginx-webdav")
+    container_id = subprocess.check_output(podman_cmd).decode().strip()
+    try:
+        for user, uid, gid in accounts:
+            subprocess.check_call(
+                [
+                    "podman",
+                    "exec",
+                    container_id,
+                    "groupadd",
+                    "-g",
+                    str(gid),
+                    f"{user}_grp",
+                ],
+                stdout=subprocess.DEVNULL,
+            )
+            subprocess.check_call(
+                [
+                    "podman",
+                    "exec",
+                    container_id,
+                    "useradd",
+                    "-u",
+                    str(uid),
+                    "-g",
+                    str(gid),
+                    "-d",
+                    "/nonexistent",
+                    user,
+                ],
+                stdout=subprocess.DEVNULL,
+            )
+
+        started = False
+        for _ in range(50):
+            try:
+                time.sleep(0.2)
+                r = httpx.get(f"http://localhost:{port}/webdav_health")
+                # Make sure the server that responds is the one we started
+                if str(config["health_check_id"]) in r.text:
+                    started = True
+                    break
+            except httpx.HTTPError as e:
+                print(str(e))
+                continue
+        if not started:
+            subprocess.check_call(["podman", "logs", container_id])
+            raise RuntimeError("Container did not start")
+
+        yield ServerInstance(
+            port=port,
+            container_id=container_id,
+            podurl=f"http://{container_name}:8080/webdav",
+            hosturl=f"http://localhost:{port}/webdav",
+        )
+    finally:
+        # Dump container logs
+        subprocess.check_call(["podman", "logs", container_id])
+        # Stop podman container and clean up
+        _remove_container(container_id)
+        os.remove(f"nginx/lua/{cfg_name}")
+
+
+@pytest.fixture(scope="session")
+def usermapped_server(build_container: None, oidc_mock_idp: MockIdP):
+    """A server with user_mapping enabled (claim `name`, no fallback).
+
+    Tokens whose `name` claim matches a local unix account perform file I/O
+    as that account; other tokens are rejected with 403.
+    """
+    yield from _start_usermapped_server(
+        oidc_mock_idp,
+        container_name="nginx-usermap-strict",
+        user_mapping={"claim": "name"},
+        cfg_name="config-usermap-strict.json",
+        accounts=[
+            ("testuser", 10001, 10001),
+            ("testuser2", 10002, 10002),
+            # uid and primary gid deliberately differ: proves the mapped
+            # group (egid) is set independently of the mapped user
+            ("testuser3", 10003, 20003),
+        ],
+        start_port=8480,
+    )
+
+
+@pytest.fixture(scope="session")
+def usermapped_fallback_server(build_container: None, oidc_mock_idp: MockIdP):
+    """A server with user_mapping enabled and a fallback account (nobody).
+
+    Tokens whose `name` claim does not match a local account perform file
+    I/O as the fallback account instead of being rejected.
+    """
+    yield from _start_usermapped_server(
+        oidc_mock_idp,
+        container_name="nginx-usermap-fallback",
+        user_mapping={
+            "claim": "name",
+            "fallback": {"uid": 65534, "gid": 65534},
+        },
+        cfg_name="config-usermap-fallback.json",
+        accounts=[("testuser", 10001, 10001)],
+        start_port=8490,
+    )
+
+
+@pytest.fixture(scope="session")
+def usermapped_guards_server(build_container: None, oidc_mock_idp: MockIdP):
+    """A server with user_mapping plus the on_missing and uid_range guards.
+
+    Tokens without the claim are rejected (on_missing=deny) and mapped uids
+    outside [10000, 10010] are rejected.
+    """
+    yield from _start_usermapped_server(
+        oidc_mock_idp,
+        container_name="nginx-usermap-guards",
+        user_mapping={
+            "claim": "name",
+            "on_missing": "deny",
+            "uid_range": [10000, 10010],
+        },
+        cfg_name="config-usermap-guards.json",
+        accounts=[
+            ("testuser", 10001, 10001),
+            ("testuser4", 10100, 10100),
+        ],
+        start_port=8500,
+    )
 
 
 @pytest.fixture(scope="session")
@@ -424,6 +624,7 @@ def setup_cluster(build_container: None, oidc_mock_idp: MockIdP):
             "--name",
             f"nginx-webdav-test{i}",
         ]
+        podman_cmd.extend(_host_alias_args())
         podman_cmd.append("nginx-webdav")
         container_id = subprocess.check_output(podman_cmd).decode().strip()
         container_ids.append(container_id)
