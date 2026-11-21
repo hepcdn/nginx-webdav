@@ -47,7 +47,7 @@ RUN /usr/local/openresty/luajit/bin/luarocks install lua-zlib
 # failing test fails the image build.
 COPY as_user.c test_as_user.c /usr/local/src/
 RUN gcc -O2 -Wall -Wextra -shared -fPIC -o as_user.so as_user.c \
-    && gcc -O2 -Wall -Wextra -o test_as_user test_as_user.c as_user.c \
+    && gcc -O2 -Wall -Wextra -pthread -o test_as_user test_as_user.c as_user.c \
     && ./test_as_user root \
     && ./test_as_user nonroot
 

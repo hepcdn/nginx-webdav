@@ -23,10 +23,14 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h> /* setgroups(2) */
+#include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/xattr.h>
 #include <unistd.h>
@@ -44,6 +48,10 @@ int as_user_setxattr(int uid, int gid, const char *root, const char *path,
 
 #define TUID 10001
 #define TGID 20001
+/* A group that is neither the mapped user's primary group nor a group the
+ * mapped user belongs to: the worker's supplementary group in the
+ * supplementary-group test (see root_mode). */
+#define SGID 20002
 
 static int failures = 0;
 static int checks = 0;
@@ -82,6 +90,53 @@ static long file_size(const char *path) {
     return (long)st.st_size;
 }
 
+/* One-shot alarm handler: interrupts the writer's blocked write() to
+ * exercise the EINTR retry path of as_user_write. Classic signal(3)
+ * semantics reset the disposition to SIG_DFL after delivery, so it fires
+ * exactly once. */
+static void alarm_handler(int sig) {
+    (void)sig;
+}
+
+/* Reader thread for the as_user_write full-write test: drains the pipe,
+ * counting exactly how many bytes arrive. It blocks SIGALRM so the alarm
+ * can only interrupt the writer thread, and sleeps delay_ms before the
+ * first read so the writer's first write() deterministically fills the
+ * pipe and blocks (a blocking write to a pipe with a live reader would
+ * otherwise return the full count and the short-write/EINTR paths would
+ * never be exercised). */
+struct pipe_drain {
+    int fd;
+    long total;
+    long delay_ms;
+};
+
+static void *drain_pipe(void *arg) {
+    struct pipe_drain *pd = arg;
+    sigset_t block;
+    char buf[4096];
+    sigemptyset(&block);
+    sigaddset(&block, SIGALRM);
+    pthread_sigmask(SIG_BLOCK, &block, NULL);
+    if (pd->delay_ms > 0) {
+        usleep((useconds_t)(pd->delay_ms * 1000));
+    }
+    for (;;) {
+        ssize_t r = read(pd->fd, buf, sizeof buf);
+        if (r < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        if (r == 0) {
+            break;
+        }
+        pd->total += r;
+    }
+    return NULL;
+}
+
 static int root_mode(const char *base, const char *root) {
     char path[4096];
     char src[4096];
@@ -93,6 +148,18 @@ static int root_mode(const char *base, const char *root) {
     if (chmod(base, 0777) != 0) {
         perror("chmod base");
         return 2;
+    }
+    /* Give the (root) worker a supplementary group (SGID) that will own a
+     * group-writable directory: models the image's own `chgrp 0 +
+     * chmod g=u` layout, where the worker's group is the directory's
+     * group. This must happen before the first as_user call: the worker's
+     * groups are captured on the first switch. */
+    {
+        static const gid_t worker_suppl[] = { SGID };
+        if (setgroups(1, worker_suppl) != 0) {
+            perror("setgroups");
+            return 2;
+        }
     }
     /* The mapped user's private directory, and a root-owned one. */
     snprintf(path, sizeof path, "%s/a", base);
@@ -201,6 +268,62 @@ static int root_mode(const char *base, const char *root) {
     /* 6. errno conventions on the data-path wrappers. */
     check(as_user_write(-1, "x", 1) == -EBADF, "write to a bad fd returns -EBADF");
     check(as_user_close_fd(-1) == -EBADF, "close of a bad fd returns -EBADF");
+
+    /* 7. Supplementary groups: the worker's supplementary group (SGID,
+     * captured at the first switch) must not be visible to the mapped
+     * user: a group-writable directory owned by SGID is unreachable for a
+     * mapped user that is not in it. (Before the fix the switch left the
+     * worker's groups in place and this open succeeded.) */
+    snprintf(path, sizeof path, "%s/gshared", base);
+    if (mkdir(path, 0777) != 0 || chown(path, 0, SGID) != 0 || chmod(path, 0770) != 0) {
+        perror("setup gshared");
+        return 2;
+    }
+    snprintf(path, sizeof path, "%s/gshared/f.txt", base);
+    check(as_user_open(TUID, TUID, root, path, O_WRONLY | O_CREAT, 0644) == -EACCES,
+          "open into a group-writable dir is denied: the worker's supplementary groups are dropped");
+    check(file_size(path) == -1,
+          "no file is created via the worker's supplementary group");
+
+    /* 8. as_user_write delivers the whole buffer even when write() is
+     * interrupted: the reader thread is held off (100 ms) behind the
+     * alarm (20 ms), so the writer's first write() fills the pipe (a
+     * 64 KB pipe, 256 KB buffer) and blocks, and SIGALRM interrupts it
+     * with EINTR while 64 KB is in flight. A correct implementation
+     * retries and returns the full buffer size; one that returns the
+     * error (or a short count) loses data that the caller's checksum
+     * still covers. */
+    {
+        int pfd[2];
+        struct pipe_drain pd;
+        struct itimerval it;
+        pthread_t th;
+        static char big[256 * 1024];
+        memset(big, 'A', sizeof big);
+        if (pipe(pfd) != 0) {
+            perror("pipe");
+            return 2;
+        }
+        pd.fd = pfd[0];
+        pd.total = 0;
+        pd.delay_ms = 100;
+        if (pthread_create(&th, NULL, drain_pipe, &pd) != 0) {
+            perror("pthread_create");
+            return 2;
+        }
+        signal(SIGALRM, alarm_handler);
+        memset(&it, 0, sizeof it);
+        it.it_value.tv_usec = 20000; /* one-shot, 20 ms */
+        setitimer(ITIMER_REAL, &it, NULL);
+        int w = as_user_write(pfd[1], big, (int)sizeof big);
+        close(pfd[1]);
+        pthread_join(th, NULL);
+        close(pfd[0]);
+        check(w == (int)sizeof big,
+              "an interrupted write is retried: as_user_write returns the full size");
+        check(pd.total == (long)sizeof big,
+              "the reader received exactly the bytes the write reported");
+    }
 
     return failures;
 }

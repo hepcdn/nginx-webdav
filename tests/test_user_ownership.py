@@ -2,16 +2,22 @@
 
 Design: docs/design/per-user-file-ownership.md
 
-When `user_mapping` is configured, the verified token's claim (default:
-`name`, per the WLCG common JWT profile) selects the local unix account
-used for file I/O, so files are created owned by that account and POSIX
-permissions are enforced at open() time.
+When `user_mapping` is configured, the verified token is mapped to a local
+unix account for file I/O, so files are created owned by that account and
+POSIX permissions are enforced at open() time. The account comes either
+from an explicit `sub` -> account `map` (recommended) or from a JWT claim
+(default: `preferred_username`, never the editable `name` display name),
+and tokens that do not resolve to an account are rejected by default
+(`on_missing: "deny"`).
 """
 
+import socket
 import subprocess
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from typing import Iterable
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -330,6 +336,187 @@ def test_denied_lookups_are_cached(
         content=b"ghost",
     )
     assert r.status_code == 403, "the cached denial must outlive the account creation"
+
+
+def _token_headers_for(
+    idp: MockIdP, sub: str, name: str | None = None, preferred_username: str | None = None
+) -> dict[str, str]:
+    return {
+        "Authorization": "Bearer "
+        + idp.make_wlcg_token(
+            WRITE_SCOPE,
+            sub=sub,
+            client_id="user123",
+            name=name,
+            preferred_username=preferred_username,
+        )
+    }
+
+
+def test_table_mode_lists_sub_maps_to_account(
+    usermapped_table_server: ServerInstance, oidc_mock_idp: MockIdP
+):
+    # sub-alice is listed in the map -> testuser, regardless of any other
+    # claims the token carries
+    headers = _token_headers_for(
+        oidc_mock_idp, "sub-alice", name="testuser2", preferred_username="ghostname"
+    )
+    r = httpx.put(
+        f"{usermapped_table_server.hosturl}/tm_alice.txt",
+        headers=headers,
+        content=b"mapped by table",
+    )
+    assert r.status_code == 201, r.text
+    assert (
+        _uid_gid(usermapped_table_server.container_id, "tm_alice.txt") == TESTUSER
+    ), "the map entry, not any claim, must decide the account"
+
+
+def test_table_mode_second_entry_maps_to_other_account(
+    usermapped_table_server: ServerInstance, oidc_mock_idp: MockIdP
+):
+    r = httpx.put(
+        f"{usermapped_table_server.hosturl}/tm_bob.txt",
+        headers=_token_headers_for(oidc_mock_idp, "sub-bob"),
+        content=b"mapped by table",
+    )
+    assert r.status_code == 201, r.text
+    assert _uid_gid(usermapped_table_server.container_id, "tm_bob.txt") == TESTUSER2
+
+
+def test_table_mode_unlisted_sub_denied(
+    usermapped_table_server: ServerInstance, oidc_mock_idp: MockIdP
+):
+    r = httpx.put(
+        f"{usermapped_table_server.hosturl}/tm_stranger.txt",
+        headers=_token_headers_for(oidc_mock_idp, "sub-stranger"),
+        content=b"not listed",
+    )
+    assert r.status_code == 403, r.text
+    assert not _exists(usermapped_table_server.container_id, "tm_stranger.txt")
+
+
+def test_table_mode_no_coincidental_local_account_match(
+    usermapped_table_server: ServerInstance, oidc_mock_idp: MockIdP
+):
+    # "testuser2" is a real local account, but its name is NOT a key in the
+    # map: it must not be mapped by coincidence (claim-style lookup would
+    # have let this token pick the testuser2 account)
+    r = httpx.put(
+        f"{usermapped_table_server.hosturl}/tm_coincidence.txt",
+        headers=_token_headers_for(oidc_mock_idp, "testuser2", name="testuser2"),
+        content=b"coincidence",
+    )
+    assert r.status_code == 403, r.text
+    assert not _exists(usermapped_table_server.container_id, "tm_coincidence.txt")
+
+
+def test_default_claim_is_preferred_username(
+    usermapped_defaults_server: ServerInstance, oidc_mock_idp: MockIdP
+):
+    # The server config sets no `claim`: the default must be
+    # preferred_username. The token carries a misleading `name` claim that
+    # matches no local account and a `preferred_username` that does: the
+    # account must come from preferred_username.
+    headers = _token_headers_for(
+        oidc_mock_idp, "user123", name="ghostname", preferred_username="testuser"
+    )
+    r = httpx.put(
+        f"{usermapped_defaults_server.hosturl}/d_pref.txt",
+        headers=headers,
+        content=b"default claim",
+    )
+    assert r.status_code == 201, r.text
+    assert _uid_gid(usermapped_defaults_server.container_id, "d_pref.txt") == TESTUSER
+
+
+def test_default_on_missing_denies_claimless_tokens(
+    usermapped_defaults_server: ServerInstance, oidc_mock_idp: MockIdP
+):
+    # The server config sets no `on_missing`: the default must be "deny".
+    # A token with neither preferred_username nor name (like a
+    # client-credentials token) must be rejected, not silently served as
+    # root.
+    r = httpx.put(
+        f"{usermapped_defaults_server.hosturl}/d_noclaim.txt",
+        headers=_token_headers_for(oidc_mock_idp, "user123"),
+        content=b"no claims at all",
+    )
+    assert r.status_code == 403, r.text
+    assert not _exists(usermapped_defaults_server.container_id, "d_noclaim.txt")
+
+
+def _put_abort_mid_body(url: str, headers: dict[str, str], sent: int, declared: int):
+    """Open a raw connection, send a PUT declaring `declared` bytes, send
+    only `sent` bytes, then close the connection (the server sees a client
+    abort mid-transfer)."""
+    parts = urlparse(url)
+    host, port = parts.hostname, parts.port or 80
+    body = b"x" * sent
+    req = (
+        f"PUT {parts.path} HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        f"Content-Length: {declared}\r\n"
+        + "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+        + "\r\n"
+    )
+    sock = socket.create_connection((host, port))
+    sock.sendall(req.encode() + body)
+    sock.close()
+
+
+def _wait_for_log(container_id: str, marker: str, timeout: float = 10.0) -> bool:
+    """Poll the container log until `marker` appears (nginx logs to
+    stderr; the log driver can lag)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        r = subprocess.run(
+            ["podman", "logs", container_id],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        if marker.encode() in r.stdout:
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def test_failed_upload_cleanup_runs_as_owner(
+    usermapped_server: ServerInstance, oidc_mock_idp: MockIdP
+):
+    # A file the mapped user may OVERWRITE but not UNLINK: root-owned,
+    # mode 0666, in the store root (mode 1777 = sticky, dir owned by
+    # root, so testuser cannot unlink a root-owned file there). A failed
+    # overwriting PUT must NOT make root delete the file: the cleanup runs
+    # as the mapped user and is denied by the filesystem.
+    relpath = "umcleanup_target.txt"
+    subprocess.check_call(
+        [
+            "podman",
+            "exec",
+            usermapped_server.container_id,
+            "bash",
+            "-c",
+            f"echo precious > /var/www/webdav/{relpath} && "
+            f"chmod 0666 /var/www/webdav/{relpath}",
+        ],
+        stdout=subprocess.DEVNULL,
+    )
+    headers = _token_headers(oidc_mock_idp, "testuser")
+    _put_abort_mid_body(
+        f"{usermapped_server.hosturl}/{relpath}", headers, sent=8192, declared=65536
+    )
+    # Synchronize on the cleanup attempt reaching the error log: with the
+    # mapped user's credentials the unlink is denied (errno 13) and logged.
+    assert _wait_for_log(
+        usermapped_server.container_id,
+        f"failed to cleanup /var/www/webdav/{relpath}",
+    ), "the cleanup attempt (as the mapped user) was never logged"
+    # The root-owned file must still be there: a root-level os.remove
+    # would have deleted it regardless of the mapped user's permissions.
+    assert _exists(usermapped_server.container_id, relpath), (
+        "a failed upload deleted a file the mapped user cannot unlink"
+    )
 
 
 class _TpcSourceHandler(BaseHTTPRequestHandler):

@@ -7,14 +7,18 @@
 ---so the (root) worker can stream data over the returned fd.
 ---
 ---Safety in nginx (see as_user.c for the details):
----* Every C function is one straight-line sequence: validate -> setegid ->
----  seteuid -> one syscall -> seteuid(0) -> setegid(0) -> return. It never
----  allocates, sleeps or re-enters the event loop, so a LuaJIT coroutine
----  cannot yield in the middle of the call, and the worker's other in-flight
----  requests never observe switched credentials.
----* Only effective (seteuid/setegid) credentials are switched, and they are
----  always restored, so the worker keeps its real uid 0 for its whole
----  lifetime.
+---* Every C function is one straight-line sequence: validate -> setgroups
+---  (drop the worker's supplementary groups) -> setegid -> seteuid -> one
+---  syscall -> seteuid -> setegid -> setgroups (restore) -> return. It
+---  never allocates, sleeps or re-enters the event loop, so a LuaJIT
+---  coroutine cannot yield in the middle of the call, and the worker's
+---  other in-flight requests never observe switched credentials.
+---* Only effective (seteuid/setegid) credentials and the supplementary
+---  group list are switched, and they are always restored, so the worker
+---  keeps its real uid 0 for its whole lifetime. The supplementary drop
+---  matters: a root worker's group 0 would otherwise let every mapped user
+---  reach group-root group-writable directories (the `chgrp 0 + chmod g=u`
+---  layout used by OpenShift-style storage and this repo's own Dockerfile).
 ---
 ---C return convention (like a raw syscall): success value on success
 ---(fd >= 0, or 0), or the negated errno (-errno < 0) on failure. The error
@@ -27,6 +31,12 @@
 ---absolute path under config.data.local_path. On failure they return
 ---(nil, errmsg, class) where class is "forbidden" (the mapped user lacks
 ---permission), "not_found", or "error".
+---
+---The .so is loaded lazily, on the first call, because every function here
+---is only ever called on the mapped-owner path: a deployment without the
+---library (feature disabled, or the README's development workflow that
+---mounts ./nginx/lua into a prebuilt image) must not fail at
+---require("asuser") time.
 
 local ffi = require("ffi")
 local config = require("config")
@@ -42,7 +52,14 @@ int as_user_setxattr(int uid, int gid, const char *root, const char *path,
     const char *name, const char *value, size_t size, int flags);
 ]]
 
-local lib = ffi.load("/usr/local/openresty/site/lualib/as_user.so")
+local lib
+
+local function loadlib()
+    if not lib then
+        lib = ffi.load("/usr/local/openresty/site/lualib/as_user.so")
+    end
+    return lib
+end
 
 local asuser = {}
 
@@ -77,7 +94,7 @@ end
 ---@param path string
 ---@return nil?, string? err, string? class
 function asuser.mkdirp(owner, path)
-    local r = lib.as_user_mkdirp(owner.uid, owner.gid, config.data.local_path, path, DIRMODE)
+    local r = loadlib().as_user_mkdirp(owner.uid, owner.gid, config.data.local_path, path, DIRMODE)
     if r == 0 then
         return nil
     end
@@ -92,7 +109,7 @@ end
 ---@param path string
 ---@return integer? fd, string? err, string? class
 function asuser.open_for_write(owner, path)
-    local r = lib.as_user_open(owner.uid, owner.gid, config.data.local_path, path,
+    local r = loadlib().as_user_open(owner.uid, owner.gid, config.data.local_path, path,
         O_WRONLY + O_CREAT + O_TRUNC, FILEMODE)
     if r < 0 then
         local errno = -r
@@ -106,7 +123,7 @@ end
 ---@param path string
 ---@return integer? fd, string? err, string? class
 function asuser.open_for_read(owner, path)
-    local r = lib.as_user_open(owner.uid, owner.gid, config.data.local_path, path,
+    local r = loadlib().as_user_open(owner.uid, owner.gid, config.data.local_path, path,
         O_RDONLY, 0)
     if r < 0 then
         local errno = -r
@@ -120,7 +137,7 @@ end
 ---@param path string
 ---@return boolean?, string? err, string? class
 function asuser.unlink(owner, path)
-    local r = lib.as_user_unlink(owner.uid, owner.gid, config.data.local_path, path)
+    local r = loadlib().as_user_unlink(owner.uid, owner.gid, config.data.local_path, path)
     if r ~= 0 then
         local errno = -r
         return nil, "failed to delete file " .. path .. ": errno " .. errno, classify(errno)
@@ -139,7 +156,7 @@ function asuser.write_fd(fd, data)
     end
     local fbuf = ffi.new("char[?]", #data)
     ffi.copy(fbuf, data, #data)
-    local r = lib.as_user_write(fd, fbuf, #data)
+    local r = loadlib().as_user_write(fd, fbuf, #data)
     if r < 0 then
         return nil, "errno " .. (-r)
     end
@@ -150,7 +167,7 @@ end
 ---@param fd integer
 ---@return nil?, string? err
 function asuser.close_fd(fd)
-    local r = lib.as_user_close_fd(fd)
+    local r = loadlib().as_user_close_fd(fd)
     if r ~= 0 then
         return nil, "errno " .. (-r)
     end
@@ -168,7 +185,7 @@ end
 function asuser.setxattr(owner, path, key, value)
     local vbuf = ffi.new("char[?]", #value)
     ffi.copy(vbuf, value, #value)
-    local r = lib.as_user_setxattr(owner.uid, owner.gid, config.data.local_path, path, key, vbuf, #value, 0)
+    local r = loadlib().as_user_setxattr(owner.uid, owner.gid, config.data.local_path, path, key, vbuf, #value, 0)
     if r ~= 0 then
         local errno = -r
         return "failed to set xattr " .. key .. " on " .. path .. ": errno " .. errno, classify(errno)

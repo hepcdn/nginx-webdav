@@ -58,8 +58,9 @@ end
 
 -- Map the verified token to a local unix account for file ownership.
 -- Opt-in via user_mapping in config.json (see nginx/lua/usermap.lua); when
--- disabled, or when the token has no mapping, owner is nil and file I/O
--- runs as root (legacy behavior).
+-- disabled, owner is nil and file I/O runs as root (legacy behavior). When
+-- enabled, a token that does not resolve to a mapped account is rejected
+-- by default (403), not silently served as root.
 local usermap = require("usermap")
 local owner, owner_err = usermap.resolve(res)
 if owner_err then

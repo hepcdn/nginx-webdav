@@ -25,6 +25,11 @@
  *    they are always restored: the worker's real uid/gid stay at their
  *    startup values for its whole lifetime, so there is no way to be
  *    "stuck" as a mapped user.
+ *  - The worker's supplementary groups are dropped (setgroups(0, NULL))
+ *    for the duration of each switched operation and restored on the way
+ *    out: otherwise the mapped user would inherit the worker's groups
+ *    (gid 0 for a root worker), making every group-root group-writable
+ *    directory writable by every mapped user.
  *  - The worker must have a clean identity (uid == euid, gid == egid) and
  *    CAP_SETUID and CAP_SETGID in the effective set; root satisfies the
  *    second condition trivially, a non-root worker gets them via file
@@ -47,6 +52,7 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h> /* setgroups(2); getgroups is in unistd.h */
 #include <stddef.h>
 #include <stdio.h> /* rename(2) */
 #include <string.h>
@@ -66,6 +72,15 @@
  */
 static int worker_uid = -1;
 static int worker_gid = -1;
+
+/* The worker's supplementary groups, captured once on the first switch.
+ * Each switched operation runs with an empty supplementary list (the
+ * mapped user must not inherit the worker's groups), and the list is
+ * restored on the way out, so the worker's own (unmapped) file I/O is
+ * unaffected. */
+#define MAX_WORKER_GROUPS 256
+static gid_t worker_groups[MAX_WORKER_GROUPS];
+static int worker_ngroups = -1;
 
 /* capability(7): the kernel's in-kernel representation (CAP_VERSION_3,
  * two 32-bit words covering CAP_0..CAP_63). */
@@ -106,12 +121,36 @@ static int as_user_switch(int uid, int gid) {
         }
         worker_uid = getuid();
         worker_gid = getgid();
+        /* Capture the worker's supplementary groups once so restore can
+         * put them back after each switch (see below). */
+        int n = getgroups(0, NULL);
+        if (n < 0) {
+            n = 0;
+        }
+        if (n > MAX_WORKER_GROUPS) {
+            n = MAX_WORKER_GROUPS;
+        }
+        if (n > 0 && getgroups(n, worker_groups) != n) {
+            n = 0;
+        }
+        worker_ngroups = n;
+    }
+    /* Drop the worker's supplementary groups for the duration of the
+     * switched operation: otherwise the mapped user inherits them (gid 0
+     * for a root worker) and could reach group-root group-writable
+     * directories it has no business in. restore() puts them back. */
+    if (setgroups(0, NULL) != 0) {
+        return -EPERM;
     }
     if (setegid((gid_t)gid) != 0) {
+        setgroups(worker_ngroups > 0 ? (size_t)worker_ngroups : 0,
+                  worker_ngroups > 0 ? worker_groups : NULL);
         return -EPERM;
     }
     if (seteuid((uid_t)uid) != 0) {
         setegid((gid_t)worker_gid);
+        setgroups(worker_ngroups > 0 ? (size_t)worker_ngroups : 0,
+                  worker_ngroups > 0 ? worker_groups : NULL);
         return -EPERM;
     }
     return 0;
@@ -120,6 +159,8 @@ static int as_user_switch(int uid, int gid) {
 static void as_user_restore(void) {
     seteuid((uid_t)worker_uid);
     setegid((gid_t)worker_gid);
+    setgroups(worker_ngroups > 0 ? (size_t)worker_ngroups : 0,
+              worker_ngroups > 0 ? worker_groups : NULL);
 }
 
 /*
@@ -251,13 +292,25 @@ int as_user_mkdirp(int uid, int gid, const char *root, const char *path,
  * change is needed here (permissions are fixed at open() time). These wrap
  * libc so the caller never has to read the process-global errno from Lua.
  * n is bounded by receive_buffer_size (fits in int).
+ *
+ * as_user_write retries until the whole buffer is written: a short write
+ * (typically just before ENOSPC, or after an interrupting signal) is
+ * retried from where it stopped. It returns the number of bytes written
+ * (== n on success) or the negated errno.
  */
 int as_user_write(int fd, const char *buf, int n) {
-    ssize_t r = write(fd, buf, (size_t)n);
-    if (r < 0) {
-        return -errno;
+    int off = 0;
+    while (off < n) {
+        ssize_t r = write(fd, buf + off, (size_t)(n - off));
+        if (r < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -errno;
+        }
+        off += (int)r;
     }
-    return (int)r;
+    return n;
 }
 
 int as_user_close_fd(int fd) {

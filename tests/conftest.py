@@ -65,6 +65,7 @@ class MockIdP:
         sub: str = "user123",
         client_id: str = "user123",
         name: str | None = None,
+        preferred_username: str | None = None,
     ) -> str:
         """Generate a WLCG-compatible bearer token.
 
@@ -91,6 +92,8 @@ class MockIdP:
         }
         if name is not None:
             token["name"] = name
+        if preferred_username is not None:
+            token["preferred_username"] = preferred_username
         return self.encode_jwt(token)
 
 
@@ -570,6 +573,51 @@ def usermapped_guards_server(build_container: None, oidc_mock_idp: MockIdP):
             ("testuser4", 10100, 10100),
         ],
         start_port=8500,
+    )
+
+
+@pytest.fixture(scope="session")
+def usermapped_table_server(build_container: None, oidc_mock_idp: MockIdP):
+    """A server with an explicit sub -> account `map` (no claim lookup).
+
+    Only tokens whose `sub` is listed in the map are mapped; every other
+    token is rejected (default on_missing=deny), including subs that
+    happen to equal a local account name.
+    """
+    yield from _start_usermapped_server(
+        oidc_mock_idp,
+        container_name="nginx-usermap-table",
+        user_mapping={
+            "map": {
+                "sub-alice": "testuser",
+                "sub-bob": "testuser2",
+            },
+        },
+        cfg_name="config-usermap-table.json",
+        accounts=[
+            ("testuser", 10001, 10001),
+            ("testuser2", 10002, 10002),
+        ],
+        start_port=8510,
+    )
+
+
+@pytest.fixture(scope="session")
+def usermapped_defaults_server(build_container: None, oidc_mock_idp: MockIdP):
+    """A server with `user_mapping` present but only a `uid_range`.
+
+    No `map`, no `claim`, no `on_missing`: the defaults must apply
+    (claim `preferred_username`, on_missing `deny`).
+    """
+    yield from _start_usermapped_server(
+        oidc_mock_idp,
+        container_name="nginx-usermap-defaults",
+        user_mapping={"uid_range": [1000, 65534]},
+        cfg_name="config-usermap-defaults.json",
+        accounts=[
+            ("testuser", 10001, 10001),
+        ],
+        start_port=8520,
     )
 
 

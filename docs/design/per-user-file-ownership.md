@@ -122,29 +122,58 @@ Called from `webdav_access.lua` immediately after `bearer_jwt_verify`
 succeeds. Opt-in: when `user_mapping` is absent or empty, `resolve()`
 returns nil and all file I/O keeps running as root, exactly like before.
 
+The unix account is chosen by exactly one of two mechanisms:
+
+- **`map` (recommended): an explicit `sub` → account table.** The key is
+  the verified `sub` claim — immutable and assigned by the IdP, so the
+  user cannot change it — and the value is the unix account to use. Only
+  listed identities are mapped; everything else follows `on_missing`.
+  This also prevents the coincidence problem of claim-based lookup: an
+  IAM username that merely happens to match a local account name is never
+  mapped unless it is explicitly listed.
+- **claim-based (no `map`):** the configured `claim` JWT claim is looked
+  up with `getpwnam(3)`. The default claim is `preferred_username` — the
+  WLCG profile's login name, which IAM instances treat as the account's
+  username rather than a freely editable display name. The `name` claim
+  must not be used: in OIDC it is the user's *display name*, which users
+  can edit, so mapping it through `getpwnam` lets any user point it at a
+  local account they can guess (e.g. setting the display name to
+  "cmsprod").
+
 Config (`config.json`):
 
 ```json
 "user_mapping": {
-  "claim": "name",
-  "on_missing": "root",
+  "map": {
+    "https://iam.example.org/uid-12345": "alice",
+    "https://iam.example.org/uid-67890": "bob"
+  },
+  "claim": "preferred_username",
+  "on_missing": "deny",
   "deny_uids": [0],
-  "uid_range": [1000, 60000],
+  "uid_range": [1000, 65534],
   "fallback": { "uid": 65534, "gid": 65534 }
 }
 ```
 
-- `claim` (default `name`): the JWT claim holding the unix account name
-  (the WLCG common JWT profile `name` claim is exactly this).
-- `on_missing` (`root` default | `deny`): tokens without the claim run as
-  root (legacy behavior, safe rollout) or are rejected.
+- `map`: see above; when present (non-empty) the `claim` setting is
+  ignored and the `sub` claim is the only mapping input.
+- `claim` (default `preferred_username`): only consulted without a `map`.
+- `on_missing` (`deny` default | `root`): tokens that do not resolve to
+  an account are rejected, or (opt-in legacy behavior) served as the
+  worker's own identity. The default is `deny` because the alternative is
+  dangerous with this feature enabled: a client-credentials token has no
+  user claims at all, so with `root` any registered IAM client with
+  storage scopes would bypass the mapping and write as root.
 - Guards: mapped uid in `deny_uids` (root by default) or outside
   `uid_range` → 403. No local account → 403, or the configured `fallback`
-  account (e.g. `nobody`) — fallback uids pass through the same guards.
+  account (e.g. `nobody`) — fallback uids pass through the same guards,
+  so a configured `uid_range` must include the fallback uid.
 - Lookup via `posix.getpwnam`; results and denials cached in
-  `lua_shared_dict usermap_cache 10m` keyed by `<claim>=<value>` (10 min
-  TTL). `getpwnam` goes through NSS and may hit LDAP/NIS — cached, so a
-  slow directory only costs the first request per account.
+  `lua_shared_dict usermap_cache 10m` keyed by `<claim>=<value>`
+  (or `sub=<value>` in map mode), 10 min TTL. `getpwnam` goes through NSS
+  and may hit LDAP/NIS — cached, so a slow directory only costs the first
+  request per account.
 - Result: `ngx.ctx.fs_owner = {uid, gid}` (nil = root).
 
 ### 2. Privileged syscalls — `nginx/as_user.c` (new) + `nginx/lua/asuser.lua` (new)
@@ -172,8 +201,16 @@ regression fails the build; the binary is also shipped to
 `asuser.lua` wraps these: returns `(nil, errmsg, class)` on failure with
 `class ∈ {forbidden, not_found, error}` mapped from `errno`
 (EACCES/EPERM → `forbidden`, ENOENT → `not_found`). `write_fd`/`close_fd`
-operate on the already-opened fd as root (no privilege change — the
-permissions are fixed at open time).
+operate on the already-opened fd (no privilege change — the permissions
+are fixed at open time). `as_user_write` loops until the whole buffer is
+in: `write()` can return a short count on a regular file (typically just
+before ENOSPC, or after an interrupting signal), and a short write that
+is not retried would leave the adler32 xattr covering data that is not in
+the file while the upload reports success. `as_user.so` is loaded lazily
+on the first `asuser` call (every call site is on the mapped-owner path),
+so a deployment without the library — feature disabled, or the README's
+development workflow that mounts `./nginx/lua` into a prebuilt image —
+never touches `ffi.load`.
 
 ### 3. Integration
 
@@ -209,13 +246,22 @@ permissions are fixed at open time).
 ## Group credentials
 
 The switch sets **both** effective uid and effective gid (`setegid` before
-`seteuid`), so new files are owned `uid:primary_gid` and creation in
-directories group-owned by that gid succeeds. Supplementary groups (FQAN →
-`setgroups` via NSS) are a documented extension: needed only for
-group-writable dirs whose group is not the user's primary group. Verified
-in the image that without `setgroups`, group membership stays `{gid 0 or
-primary}` — fine for the common HPC layout of user-owned or
-setgid-primary-group directories.
+`seteuid`), and — since the supplementary-groups review finding — drops
+the worker's supplementary group list for the duration of the switched
+call (`setgroups(0, NULL)`, captured on the first switch and restored on
+every way out). The drop is required, not cosmetic: a root worker's group
+0 is in its supplementary list, so without the drop every mapped user
+could reach any group-root, group-writable path — the `chgrp 0` +
+`chmod g=u` layout used by OpenShift-style storage and by this repo's own
+Dockerfile. New files are owned `uid:primary_gid`; the worker's own
+(unmapped) file I/O is unaffected because the list is restored after each
+call. Setting the mapped user's *own* supplementary groups (FQAN →
+`setgroups` via NSS) is a documented extension: it is the same
+plumbing, and is only needed for group-writable dirs whose group is not
+the user's primary group. Verified in the image that the drop/restore
+round-trips correctly (unit test: a group-writable directory owned by the
+worker's supplementary group is unreachable for the mapped user while the
+switch is active, and the worker's groups are intact afterwards).
 
 ## Non-root workers with capabilities (empirically verified)
 
@@ -257,9 +303,17 @@ Linux capabilities that allow changing user/groups (`CAP_SETUID`,
 
 ## Threat model / edge cases
 
-- Mapping input is only ever a *verified* JWT; uid 0 is denied by default;
-  uid range check blocks mapping into unexpected accounts; the fallback uid
-  is subject to the same checks.
+- Mapping input is only ever a *verified* JWT. In the recommended `map`
+  mode the input is the `sub` claim (immutable, IdP-assigned) and only
+  explicitly listed subs are mapped — a user cannot steer the mapping by
+  editing any claim, and an IAM username that coincides with a local
+  account name is not mapped by accident. In claim mode the default claim
+  is `preferred_username` (the login name, not the editable display name
+  `name`). Tokens that do not resolve to an account are rejected by
+  default (`on_missing: "deny"`), so a claim-less client-credentials
+  token cannot bypass the mapping and write as root. uid 0 is denied by
+  default; the uid range check blocks mapping into unexpected accounts;
+  the fallback uid is subject to the same checks.
 - C module: the worker must have a clean identity (uid == euid, gid ==
   egid) and `CAP_SETUID`+`CAP_SETGID` in the effective set (root passes
   trivially); otherwise every call fails with EPERM (fails closed —
@@ -272,8 +326,14 @@ Linux capabilities that allow changing user/groups (`CAP_SETUID`,
 - Parent directories must be writable by the mapped user — sites pre-create
   the store tree (group-owned, setgid); user-mode `mkdirp` turns EACCES
   into a 403 instead of silently creating a root-owned directory.
-- Partial uploads are still cleaned up by the root worker (`os.remove`),
-  which can always unlink (it owns the tmpfs/store root).
+- Partial uploads are cleaned up with the *mapped user's* credentials
+  (`asuser.unlink`) when the feature is enabled, never by a root
+  `os.remove`: with the root delete, a user who may overwrite a file but
+  not unlink it (write on the file, none on its directory) could start an
+  overwriting PUT, disconnect mid-transfer, and make root remove a file
+  the user is not allowed to delete. The user's own `unlink` fails with
+  EACCES in that case, which is the correct outcome (the file remains,
+  truncated).
 - AlmaLinux containers run SELinux permissive by default; MLS-aware sites
   need an SELinux context for user-created files (out of scope, note it).
 - Compatibility: fully opt-in. Unconfigured sites see zero behavior change
@@ -281,17 +341,33 @@ Linux capabilities that allow changing user/groups (`CAP_SETUID`,
 
 ## Testing (pytest harness)
 
-Two dedicated containers with `user_mapping` enabled (created accounts
-`testuser` uid 10001, `testuser2` uid 10002; mock IdP extended to issue
-tokens with a `name` claim):
+Four dedicated containers with `user_mapping` enabled (accounts created
+in each; mock IdP extended to issue tokens with `name` and
+`preferred_username` claims):
 
-- PUT as `testuser` → 201; `stat -c %u %g` in the container shows 10001:10001;
-  adler32 `Digest` header still returned.
-- PUT into a nested path → all created parent dirs owned 10001.
-- PUT with an unmapped `name` (no fallback) → 403, nothing created.
-- PUT into a `0700` dir owned by `testuser2` → 403, nothing created.
-- DELETE of a file in a foreign `0700` dir → 403, file remains; DELETE by
-  the directory owner → 204.
+- `claim: name` (strict):
+  - PUT as `testuser` → 201; `stat -c %u %g` in the container shows
+    10001:10001; adler32 `Digest` header still returned.
+  - PUT into a nested path → all created parent dirs owned 10001.
+  - PUT with an unmapped `name` (no fallback) → 403, nothing created.
+  - PUT into a `0700` dir owned by `testuser2` → 403, nothing created.
+  - DELETE of a file in a foreign `0700` dir → 403, file remains; DELETE
+    by the directory owner → 204.
+  - `name: root` → 403 (default `deny_uids`).
+  - Denied lookups are cached (creating the account afterwards does not
+    take effect within the TTL).
+  - A mapped user cannot make a failed overwriting PUT delete a
+    root-owned file it may write but not unlink: the partial file
+    remains (cleanup runs as the mapped user, not root).
+  - TPC COPY creates destination dir + file owned by the mapped user;
+    adler32 xattr is present and matches the reported digest.
+  - `test_as_user` re-run in the runtime (root + nonroot modes).
+- `map` mode: a listed `sub` is mapped to the explicitly chosen account
+  (PUT → 201, owned by it); an unlisted `sub` → 403; a `sub` that equals
+  a local account name but is not listed → 403 (no coincidence mapping).
+- Defaults (no `claim`/`on_missing` keys): the `preferred_username` claim
+  selects the account (a misleading `name` claim is ignored); a token
+  with no usable claim → 403 (default `on_missing: deny`).
 - Fallback server: unmapped `name` → file owned by 65534 (nobody); mapped
   accounts still take precedence.
 - Phase-1 read behavior locked in (any read-scoped token reads any file).

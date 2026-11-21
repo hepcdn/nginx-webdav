@@ -212,10 +212,23 @@ function fileutil.sink_to_file(file_path, reader, perfmarkers, owner)
     end
 
     if err then
-        local rmerr
-        local suc = os.remove(file_path)
-        if not suc then
-            ngx.log(ngx.ERR, "failed to cleanup " .. file_path .. ": " .. rmerr)
+        if owner then
+            -- Clean up with the same identity that created the file: a
+            -- root-level os.remove would delete files the mapped user is
+            -- not allowed to delete (e.g. a pre-existing root-owned file
+            -- the user may overwrite but not unlink: start an overwriting
+            -- PUT, disconnect mid-transfer, and root would remove the
+            -- user's data). asuser.unlink fails with EACCES in that case,
+            -- which is the correct outcome.
+            local _, uerr = asuser.unlink(owner, file_path)
+            if uerr then
+                ngx.log(ngx.ERR, "failed to cleanup " .. file_path .. ": " .. uerr)
+            end
+        else
+            local suc, rmerr = os.remove(file_path)
+            if not suc then
+                ngx.log(ngx.ERR, "failed to cleanup " .. file_path .. ": " .. rmerr)
+            end
         end
         return err, nil, errclass
     end
