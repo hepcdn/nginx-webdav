@@ -39,7 +39,14 @@ end
 ---No op if the peer is already in the list
 function Gossip.add_peer(peer)
     local peerstr = ngx.shared.gossip_data:get("peers")
-    ---@cast peerstr string
+    if not peerstr then
+        -- The peer list has not been initialized yet: this message was
+        -- handled before the first gossip timer tick reached
+        -- Gossip.peers() (e.g. the tick bailed out on a failed token
+        -- fetch), or after remove_peer() reset the list to nil. Start
+        -- from the configured seed peers.
+        peerstr = config.data.seed_peers .. ","
+    end
     if peerstr:find(peer, 1, true) == nil then
         ngx.shared.gossip_data:set("peers", peerstr .. peer .. ",")
     end
@@ -52,7 +59,11 @@ function Gossip.remove_peer(peer)
     -- Flush any timestamp
     ngx.shared.gossip_data:set("timestamp:" .. peer, nil)
     local peerstr = ngx.shared.gossip_data:get("peers")
-    ---@cast peerstr string
+    if not peerstr then
+        -- The peer list is not initialized (or was reset to nil): the
+        -- peer cannot be in the list, so there is nothing to remove.
+        return
+    end
     local pos, endpos = peerstr:find(peer, 1, true)
     if not pos then
         ngx.log(ngx.WARN, "Logic error: peer " .. peer .. " not found in peerstr: " .. peerstr)
