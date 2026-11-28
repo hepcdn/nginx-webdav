@@ -22,7 +22,7 @@ RUN curl -Ol https://openresty.org/download/openresty-${RESTY_VERSION}.tar.gz \
         --with-http_v2_module \
         --with-http_v3_module \
         -j2 \
-    && make -j2 \
+    && make -j$(nproc 2>/dev/null || echo 2) \
     && make install \
     && cd .. \
     && curl -fSL https://luarocks.github.io/luarocks/releases/luarocks-${RESTY_LUAROCKS_VERSION}.tar.gz -o luarocks-${RESTY_LUAROCKS_VERSION}.tar.gz \
