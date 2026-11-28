@@ -1,0 +1,48 @@
+name: Test harness (compose cluster + TPC copy)
+
+# Brings up the self-contained docker-compose test cluster (test-harness/),
+# waits for it to be ready, and TPC-copies data between nodes (node1 -> node2
+# -> node3) with byte-level verification. Runs the same script a developer
+# runs locally: test-harness/tpc-copy-test.sh
+#
+# Path-filtered: the job compiles OpenResty from source (nginx/nginx.dockerfile),
+# so it only runs when the image source (nginx/) or the harness itself changes.
+# Use "Run workflow" for on-demand runs.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "nginx/**"
+      - "test-harness/**"
+      - ".github/workflows/test-harness.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "nginx/**"
+      - "test-harness/**"
+      - ".github/workflows/test-harness.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tpc-copy:
+    name: Build cluster, wait for ready, TPC copy
+    runs-on: ubuntu-latest   # Docker + compose plugin, openssl, python3 preinstalled
+    timeout-minutes: 45      # OpenResty is compiled from source (make -j2)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: TPC copy test (setup + readiness wait + copy node1->node2->node3)
+        run: bash test-harness/tpc-copy-test.sh
+
+      - name: Tear down cluster
+        if: always()
+        working-directory: test-harness
+        run: docker compose down -v
